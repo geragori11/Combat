@@ -8,7 +8,7 @@ return function(Window)
     local CombatTab = Window:CreateTab("COMBAT", 4483362458)
     
     local AimEnabled = false
-    local AimKeyName = "E"
+    local AimKeyName = nil -- Убрал дефолтную клавишу
     
     CombatTab:CreateSection("Aim Assistant")
     
@@ -22,26 +22,31 @@ return function(Window)
     })
     
     CombatTab:CreateKeybind({
-        Name = "Кнопка наведения",
-        CurrentKeybind = "E",
+        Name = "Выберите клавишу для наведения",
+        CurrentKeybind = nil, -- По умолчанию пусто
         Flag = "AimAssistKey",
         Callback = function(Keybind)
-            AimKeyName = tostring(Keybind):gsub("Enum.KeyCode.", "")
+            AimKeyName = Keybind -- Сохраняем как объект Enum
         end,
     })
     
     RunService.RenderStepped:Connect(function()
-        if AimEnabled and UserInputService:IsKeyDown(Enum.KeyCode[AimKeyName]) then
+        -- Проверяем, что AimEnabled включен, клавиша выбрана и она зажата
+        if AimEnabled and AimKeyName and UserInputService:IsKeyDown(AimKeyName) then
             for _, Player in ipairs(Players:GetPlayers()) do
                 if Player ~= LocalPlayer and Player.Character then
-                    local Hum = Player.Character:FindFirstChild("Humanoid")
-                    local root = Player.Character:FindFirstChild("HumanoidRootPart")
-                    if Hum and root and (Player.Character:FindFirstChild("Knife") or Player.Backpack:FindFirstChild("Knife")) then
-                        Camera.CFrame = CFrame.new(Camera.CFrame.Position, root.Position)
+                    -- Проверка на Мардера
+                    local isMurderer = (Player.Character:FindFirstChild("Knife") or 
+                                       (Player:FindFirstChild("Backpack") and Player.Backpack:FindFirstChild("Knife")))
+                    
+                    if isMurderer then
+                        local root = Player.Character:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            Camera.CFrame = CFrame.new(Camera.CFrame.Position, root.Position)
+                        end
                     end
                 end
             end
         end
     end)
-    print("Combat Tab Loaded Successfully")
 end
