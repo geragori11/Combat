@@ -1,6 +1,7 @@
 return function(Window)
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
     local LocalPlayer = Players.LocalPlayer
     local Camera = workspace.CurrentCamera
     local Mouse = LocalPlayer:GetMouse()
@@ -39,7 +40,6 @@ return function(Window)
         Flag = "FOVVisibleToggle",
         Callback = function(Value)
             ShowFOV = Value
-            FOVCircle.Visible = Value
         end
     })
     
@@ -57,12 +57,27 @@ return function(Window)
         end
     })
     
+    -- УМНАЯ ФУНКЦИЯ: Гарантированно находит позицию прицела/мыши
+    local function GetCustomMousePosition()
+        local UISPos = UserInputService:GetMouseLocation()
+        
+        -- Если исполнитель выдает баг с 0,0 или мышь скрыта/залочена обзором камеры
+        if UISPos.X == 0 and UISPos.Y == 0 then
+            if Mouse.X ~= 0 or Mouse.Y ~= 0 then
+                return Vector2.new(Mouse.X, Mouse.Y + 36)
+            else
+                -- Полный фолбэк: жестко берем центр экрана (куда направлена камера)
+                return Camera.ViewportSize / 2
+            end
+        end
+        return UISPos
+    end
+    
     -- Функция поиска ближайшего Мардера внутри круга FOV
     local function GetClosestMurdererInFOV()
         local Target = nil
         local ClosestDist = FOVRadius
-        -- ФИКС: Используем Mouse.X и Mouse.Y + 36 для точного определения позиции мыши
-        local MousePos = Vector2.new(Mouse.X, Mouse.Y + 36)
+        local MousePos = GetCustomMousePosition() -- Используем умную позицию
         
         for _, Player in ipairs(Players:GetPlayers()) do
             if Player ~= LocalPlayer and Player.Character then
@@ -75,7 +90,7 @@ return function(Window)
                     if root then
                         local ScreenPos, OnScreen = Camera:WorldToViewportPoint(root.Position)
                         if OnScreen then
-                            -- Считаем расстояние от курсора до цели на экране
+                            -- Считаем расстояние от круга до цели
                             local Distance = (Vector2.new(ScreenPos.X, ScreenPos.Y) - MousePos).Magnitude
                             if Distance <= ClosestDist then
                                 Target = root
@@ -107,10 +122,11 @@ return function(Window)
         return OldIndex(Self, Key)
     end)
     
-    -- ФИКС: Привязываем круг к координатам мыши в каждом кадре с учетом смещения
+    -- Постоянное обновление позиции и видимости круга в каждом кадре
     RunService.RenderStepped:Connect(function()
         if ShowFOV then
-            FOVCircle.Position = Vector2.new(Mouse.X, Mouse.Y + 36)
+            FOVCircle.Position = GetCustomMousePosition()
+            FOVCircle.Visible = true -- Принудительно держим видимым
         else
             FOVCircle.Visible = false
         end
