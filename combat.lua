@@ -1,134 +1,89 @@
 return function(Window)
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
-    local UserInputService = game:GetService("UserInputService")
     local LocalPlayer = Players.LocalPlayer
-    local Camera = workspace.CurrentCamera
-    local Mouse = LocalPlayer:GetMouse()
     
     local CombatTab = Window:CreateTab("COMBAT", 4483362458)
     
-    local SilentAimEnabled = false
-    local ShowFOV = false
-    local FOVRadius = 100
+    local HitboxEnabled = false
+    local HitboxSize = 15
+    local OriginalSizes = {} -- Сюда сохраняем заводские параметры головы
     
-    -- Создаем круг FOV
-    local FOVCircle = Drawing.new("Circle")
-    FOVCircle.Color = Color3.fromRGB(255, 0, 0)
-    FOVCircle.Thickness = 1
-    FOVCircle.NumSides = 64
-    FOVCircle.Radius = FOVRadius
-    FOVCircle.Filled = false
-    FOVCircle.Visible = false
+    CombatTab:CreateSection("Hitbox Assistant")
     
-    CombatTab:CreateSection("Silent Aim Assistant")
-    
-    -- Включение/Выключение Сайлент Аима
+    -- Переключатель функции
     CombatTab:CreateToggle({
-        Name = "Включить Silent Aim (На Мардера)",
+        Name = "Увеличить хитбокс Мардера",
         CurrentValue = false,
-        Flag = "SilentAimToggle",
+        Flag = "MurdererHitboxToggle",
         Callback = function(Value)
-            SilentAimEnabled = Value
-        end
-    })
-    
-    -- Тумблер видимости круга
-    CombatTab:CreateToggle({
-        Name = "Показать круг FOV",
-        CurrentValue = false,
-        Flag = "FOVVisibleToggle",
-        Callback = function(Value)
-            ShowFOV = Value
-        end
-    })
-    
-    -- Ползунок радиуса круга
-    CombatTab:CreateSlider({
-        Name = "Радиус круга (Зона захвата)",
-        Range = {30, 400},
-        Increment = 5,
-        Suffix = " px",
-        CurrentValue = 100,
-        Flag = "FOVRadiusSlider",
-        Callback = function(Value)
-            FOVRadius = Value
-            FOVCircle.Radius = Value
-        end
-    })
-    
-    -- УМНАЯ ФУНКЦИЯ: Гарантированно находит позицию прицела/мыши
-    local function GetCustomMousePosition()
-        local UISPos = UserInputService:GetMouseLocation()
-        
-        -- Если исполнитель выдает баг с 0,0 или мышь скрыта/залочена обзором камеры
-        if UISPos.X == 0 and UISPos.Y == 0 then
-            if Mouse.X ~= 0 or Mouse.Y ~= 0 then
-                return Vector2.new(Mouse.X, Mouse.Y + 36)
-            else
-                -- Полный фолбэк: жестко берем центр экрана (куда направлена камера)
-                return Camera.ViewportSize / 2
+            HitboxEnabled = Value
+            if not Value then
+                -- При выключении возвращаем всем Мардерам их нормальную голову
+                for player, data in pairs(OriginalSizes) do
+                    if player.Character and player.Character:FindFirstChild("Head") then
+                        local head = player.Character.Head
+                        head.Size = data.Size
+                        head.Transparency = data.Transparency
+                        head.CanCollide = data.CanCollide
+                    end
+                end
+                table.clear(OriginalSizes)
             end
         end
-        return UISPos
-    end
+    })
     
-    -- Функция поиска ближайшего Мардера внутри круга FOV
-    local function GetClosestMurdererInFOV()
-        local Target = nil
-        local ClosestDist = FOVRadius
-        local MousePos = GetCustomMousePosition() -- Используем умную позицию
+    -- Ползунок размеров
+    CombatTab:CreateSlider({
+        Name = "Размер хитбокса (Головы)",
+        Range = {2, 40},
+        Increment = 1,
+        Suffix = " studs",
+        CurrentValue = 15,
+        Flag = "HitboxSizeSlider",
+        Callback = function(Value)
+            HitboxSize = Value
+        end
+    })
+    
+    -- Цикл рендера для постоянного контроля размера
+    RunService.RenderStepped:Connect(function()
+        if not HitboxEnabled then return end
         
         for _, Player in ipairs(Players:GetPlayers()) do
             if Player ~= LocalPlayer and Player.Character then
-                -- Проверяем роль (наличие ножа)
-                local isMurderer = Player.Character:FindFirstChild("Knife") or 
-                                   (Player:FindFirstChild("Backpack") and Player.Backpack:FindFirstChild("Knife"))
+                -- Проверяем, Мардер ли это сейчас
+                local isMurderer = (Player.Character:FindFirstChild("Knife") or 
+                                   (Player:FindFirstChild("Backpack") and Player.Backpack:FindFirstChild("Knife")))
                 
-                if isMurderer then
-                    local root = Player.Character:FindFirstChild("HumanoidRootPart")
-                    if root then
-                        local ScreenPos, OnScreen = Camera:WorldToViewportPoint(root.Position)
-                        if OnScreen then
-                            -- Считаем расстояние от круга до цели
-                            local Distance = (Vector2.new(ScreenPos.X, ScreenPos.Y) - MousePos).Magnitude
-                            if Distance <= ClosestDist then
-                                Target = root
-                                ClosestDist = Distance
-                            end
+                local head = Player.Character:FindFirstChild("Head")
+                if head and head:IsA("BasePart") then
+                    if isMurderer then
+                        -- Запоминаем оригинал перед тем как раздуть голову
+                        if not OriginalSizes[Player] then
+                            OriginalSizes[Player] = {
+                                Size = head.Size,
+                                Transparency = head.Transparency,
+                                CanCollide = head.CanCollide
+                            }
+                        end
+                        
+                        -- Увеличиваем голову (хитбокс)
+                        head.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
+                        head.Transparency = 0.6 -- Делаем полупрозрачной кубической зоной для наглядности
+                        head.CanCollide = false -- Чтобы огромная голова не толкала другие предметы/игроков
+                        head.Massless = true    -- Убираем вес, чтобы не ломать физику ходьбы Мардера на твоем экране
+                    else
+                        -- Если раунд закончился или он дропнул нож, возвращаем всё назад
+                        if OriginalSizes[Player] then
+                            head.Size = OriginalSizes[Player].Size
+                            head.Transparency = OriginalSizes[Player].Transparency
+                            head.CanCollide = OriginalSizes[Player].CanCollide
+                            OriginalSizes[Player] = nil
                         end
                     end
                 end
             end
-        end
-        return Target
-    end
-    
-    -- Перехватываем выстрелы игры через метатаблицы
-    local OldIndex
-    OldIndex = hookmetamethod(game, "__index", function(Self, Key)
-        if SilentAimEnabled and not checkcaller() then
-            if Self == Mouse and (Key == "Hit" or Key == "Target") then
-                local TargetPart = GetClosestMurdererInFOV()
-                if TargetPart then
-                    if Key == "Hit" then
-                        return TargetPart.CFrame
-                    elseif Key == "Target" then
-                        return TargetPart
-                    end
-                end
-            end
-        end
-        return OldIndex(Self, Key)
-    end)
-    
-    -- Постоянное обновление позиции и видимости круга в каждом кадре
-    RunService.RenderStepped:Connect(function()
-        if ShowFOV then
-            FOVCircle.Position = GetCustomMousePosition()
-            FOVCircle.Visible = true -- Принудительно держим видимым
-        else
-            FOVCircle.Visible = false
         end
     end)
 end
