@@ -35,13 +35,10 @@ return function(Window)
         
         local RayParams = RaycastParams.new()
         RayParams.FilterType = Enum.RaycastFilterType.Exclude
-        -- Игнорируем себя, цель и камеру при просчете преград
         RayParams.FilterDescendantsInstances = {Character, TargetCharacter, Camera}
         RayParams.IgnoreWater = true
         
         local RayResult = workspace:Raycast(Origin.Position, Destination.Position - Origin.Position, RayParams)
-        
-        -- Если луч ни обо что не ударился — преград между вами нет
         return RayResult == nil
     end
 
@@ -122,41 +119,83 @@ return function(Window)
     })
 
     -- ==========================================
-    -- ПЕРЕХВАТ ДВИЖКА ИГРЫ (HOOKS)
+    -- БЕЗОПАСНЫЙ ПЕРЕХВАТ ДВИЖКА ИГРЫ (HOOKS)
     -- ==========================================
-    
-    -- 1. Перехват классических свойств мыши (Hit и Target)
-    local oldIndex
-    oldIndex = hookmetamethod(game, "__index", function(self, key)
-        if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-            local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
-            if TargetPart and (self == Mouse or self == LocalPlayer:GetMouse()) then
-                if key == "Hit" then
-                    return TargetPart.CFrame
-                elseif key == "Target" then
-                    return TargetPart
-                end
-            end
-        end
-        return oldIndex(self, key)
-    end)
+    local Hooked = false
 
-    -- 2. Перехват лучей от камеры (ViewportPointToRay / ScreenPointToRay)
-    local oldNamecall
-    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-        local method = getnamecallmethod()
-        if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-            if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
-                local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
-                if TargetPart then
-                    local OriginPos = Camera.CFrame.Position
-                    local Direction = (TargetPart.Position - OriginPos).Unit * 1000
-                    return Ray.new(OriginPos, Direction)
+    -- Способ №1: Современный hookmetamethod (если поддерживается)
+    if hookmetamethod and checkcaller then
+        pcall(function()
+            local oldIndex
+            oldIndex = hookmetamethod(game, "__index", function(self, key)
+                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
+                    local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                    if TargetPart and (self == Mouse or self == LocalPlayer:GetMouse()) then
+                        if key == "Hit" then return TargetPart.CFrame
+                        elseif key == "Target" then return TargetPart end
+                    end
                 end
-            end
-        end
-        return oldNamecall(self, ...)
-    end)
+                return oldIndex(self, key)
+            end)
+
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+                local method = getnamecallmethod()
+                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
+                    if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
+                        local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                        if TargetPart then
+                            local OriginPos = Camera.CFrame.Position
+                            local Direction = (TargetPart.Position - OriginPos).Unit * 1000
+                            return Ray.new(OriginPos, Direction)
+                        end
+                    end
+                end
+                return oldNamecall(self, ...)
+            end)
+            Hooked = true
+        end)
+    end
+
+    -- Способ №2: Классический getrawmetatable (для мобильных или старых читов)
+    if not Hooked and getrawmetatable and setreadonly and newcclosure and checkcaller then
+        pcall(function()
+            local mt = getrawmetatable(game)
+            local oldIndex = mt.__index
+            local oldNamecall = mt.__namecall
+            
+            setreadonly(mt, false)
+            
+            mt.__index = newcclosure(function(self, key)
+                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
+                    local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                    if TargetPart and (self == Mouse or self == LocalPlayer:GetMouse()) then
+                        if key == "Hit" then return TargetPart.CFrame
+                        elseif key == "Target" then return TargetPart end
+                    end
+                end
+                return oldIndex(self, key)
+            end)
+            
+            mt.__namecall = newcclosure(function(self, ...)
+                local method = getnamecallmethod()
+                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
+                    if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
+                        local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                        if TargetPart then
+                            local OriginPos = Camera.CFrame.Position
+                            local Direction = (TargetPart.Position - OriginPos).Unit * 1000
+                            return Ray.new(OriginPos, Direction)
+                        end
+                    end
+                end
+                return oldNamecall(self, ...)
+            end)
+            
+            setreadonly(mt, true)
+            Hooked = true
+        end)
+    end
 
     -- ==========================================
     -- ЕДИНЫЙ ЦИКЛ ОБРАБОТКИ (RENDERSTEPPED)
@@ -171,7 +210,6 @@ return function(Window)
                 
                 if isMurderer then
                     local humanoid = Player.Character:FindFirstChildOfClass("Humanoid")
-                    -- Мардер считается валидным, если он жив И виден (нет преград)
                     if humanoid and humanoid.Health > 0 and IsVisible(Player) then
                         CurrentMurderer = Player
                     end
