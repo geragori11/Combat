@@ -57,6 +57,7 @@ return function(Window)
                 for player, data in pairs(OriginalSizes) do
                     if player.Character and player.Character:FindFirstChild("Head") then
                         local head = player.Character.Head
+                        local_sizes = data.Size
                         head.Size = data.Size
                         head.Transparency = data.Transparency
                         head.CanCollide = data.CanCollide
@@ -80,12 +81,12 @@ return function(Window)
     })
 
     -- ==========================================
-    -- СЕКЦИЯ: SILENT AUTO AIM
+    -- СЕКЦИЯ: AUTO AIM
     -- ==========================================
-    CombatTab:CreateSection("Silent Auto Aim")
+    CombatTab:CreateSection("Auto Aim")
 
     CombatTab:CreateToggle({
-        Name = "Включить Автоаим (Silent)",
+        Name = "Включить Наведение (Hard Aim)",
         CurrentValue = false,
         Flag = "AutoAimToggle",
         Callback = function(Value)
@@ -122,19 +123,16 @@ return function(Window)
     -- ЗАЩИЩЕННЫЙ ПЕРЕХВАТ ДВИЖКА ИГРЫ (HOOKS)
     -- ==========================================
     local Hooked = false
-
-    -- Проверяем типы окружения на уровне архитектуры эксэкутора во избежание нил-вызовов
     local hasHook = typeof(hookmetamethod) == "function"
     local hasCheck = typeof(checkcaller) == "function"
     local hasNamecallGetter = typeof(getnamecallmethod) == "function"
 
-    -- Метод №1: hookmetamethod
     if hasHook and hasCheck then
         pcall(function()
             local oldIndex
             oldIndex = hookmetamethod(game, "__index", function(self, key)
                 if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                    local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
                     if TargetPart and (self == Mouse or self == LocalPlayer:GetMouse()) then
                         if key == "Hit" then return TargetPart.CFrame
                         elseif key == "Target" then return TargetPart end
@@ -149,7 +147,7 @@ return function(Window)
                     local method = getnamecallmethod()
                     if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
                         if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
-                            local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                            local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
                             if TargetPart then
                                 local OriginPos = Camera.CFrame.Position
                                 local Direction = (TargetPart.Position - OriginPos).Unit * 1000
@@ -164,7 +162,6 @@ return function(Window)
         end)
     end
 
-    -- Метод №2: getrawmetatable (резервный для простых/мобильных читов)
     if not Hooked and typeof(getrawmetatable) == "function" and typeof(setreadonly) == "function" and typeof(newcclosure) == "function" and hasCheck then
         pcall(function()
             local mt = getrawmetatable(game)
@@ -175,7 +172,7 @@ return function(Window)
             
             mt.__index = newcclosure(function(self, key)
                 if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                    local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
                     if TargetPart and (self == Mouse or self == LocalPlayer:GetMouse()) then
                         if key == "Hit" then return TargetPart.CFrame
                         elseif key == "Target" then return TargetPart end
@@ -189,7 +186,7 @@ return function(Window)
                     local method = getnamecallmethod()
                     if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
                         if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
-                            local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                            local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
                             if TargetPart then
                                 local OriginPos = Camera.CFrame.Position
                                 local Direction = (TargetPart.Position - OriginPos).Unit * 1000
@@ -254,7 +251,7 @@ return function(Window)
             end
         end
 
-        -- Вычисление задержки реакции и автовыстрел
+        -- Вычисление задержки реакции, наведение камеры и автовыстрел
         if AimEnabled and CurrentMurderer then
             if CurrentMurderer ~= LastTarget then
                 LastTarget = CurrentMurderer
@@ -265,6 +262,16 @@ return function(Window)
             if elapsed >= AimReactionTime then
                 AimTarget = CurrentMurderer
 
+                -- [НОВОЕ] Физическое наведение камеры на голову Мардера
+                if AimTarget.Character then
+                    local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
+                    if TargetPart then
+                        -- Плавно или мгновенно разворачиваем камеру к цели
+                        Camera.CFrame = CFrame.new(Camera.CFrame.Position, TargetPart.Position)
+                    end
+                end
+
+                -- Логика автовыстрела
                 if AutoShootEnabled then
                     local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
                     if Gun and (tick() - LastShotTime > 0.4) then 
