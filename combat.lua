@@ -3,6 +3,7 @@ return function(Window)
     local RunService = game:GetService("RunService")
     local LocalPlayer = Players.LocalPlayer
     local Mouse = LocalPlayer:GetMouse()
+    local Camera = workspace.CurrentCamera
     
     local CombatTab = Window:CreateTab("COMBAT", 4483362458)
     
@@ -13,12 +14,36 @@ return function(Window)
     
     -- --- ПЕРЕМЕННЫЕ АВТОАИМА ---
     local AimEnabled = false
-    local AimReactionTime = 0 -- Задержка в миллисекундах
+    local AimReactionTime = 0 
     local AutoShootEnabled = false
     local AimTarget = nil
     local LastTarget = nil
     local TargetTime = 0
     local LastShotTime = 0
+
+    -- ==========================================
+    -- ФУНКЦИЯ ПРОВЕРКИ СТЕН (WALL CHECK)
+    -- ==========================================
+    local function IsVisible(TargetPlayer)
+        local Character = LocalPlayer.Character
+        local TargetCharacter = TargetPlayer.Character
+        if not Character or not TargetCharacter then return false end
+        
+        local Origin = Character:FindFirstChild("HumanoidRootPart") or Character:FindFirstChild("Head")
+        local Destination = TargetCharacter:FindFirstChild("HumanoidRootPart") or TargetCharacter:FindFirstChild("Head")
+        if not Origin or not Destination then return false end
+        
+        local RayParams = RaycastParams.new()
+        RayParams.FilterType = Enum.RaycastFilterType.Exclude
+        -- Игнорируем себя, цель и камеру при просчете преград
+        RayParams.FilterDescendantsInstances = {Character, TargetCharacter, Camera}
+        RayParams.IgnoreWater = true
+        
+        local RayResult = workspace:Raycast(Origin.Position, Destination.Position - Origin.Position, RayParams)
+        
+        -- Если луч ни обо что не ударился — преград между вами нет
+        return RayResult == nil
+    end
 
     -- ==========================================
     -- СЕКЦИЯ: HITBOX ASSISTANT
@@ -58,7 +83,7 @@ return function(Window)
     })
 
     -- ==========================================
-    -- СЕКЦИЯ: SILENT AUTO AIM (НОВАЯ)
+    -- СЕКЦИЯ: SILENT AUTO AIM
     -- ==========================================
     CombatTab:CreateSection("Silent Auto Aim")
 
@@ -97,47 +122,41 @@ return function(Window)
     })
 
     -- ==========================================
-    -- ЯДРО SILENT AIM (ПОДМЕНА ПОЛОЖЕНИЯ МЫШКИ)
+    -- ПЕРЕХВАТ ДВИЖКА ИГРЫ (HOOKS)
     -- ==========================================
-    local HooksSupported, err = pcall(function()
-        local oldIndex
-        oldIndex = hookmetamethod(game, "__index", function(self, key)
-            if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
-                if TargetPart and self == Mouse then
-                    if key == "Hit" then
-                        return TargetPart.CFrame
-                    elseif key == "Target" then
-                        return TargetPart
-                    end
+    
+    -- 1. Перехват классических свойств мыши (Hit и Target)
+    local oldIndex
+    oldIndex = hookmetamethod(game, "__index", function(self, key)
+        if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
+            local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+            if TargetPart and (self == Mouse or self == LocalPlayer:GetMouse()) then
+                if key == "Hit" then
+                    return TargetPart.CFrame
+                elseif key == "Target" then
+                    return TargetPart
                 end
             end
-            return oldIndex(self, key)
-        end)
+        end
+        return oldIndex(self, key)
     end)
 
-    -- Резервный метод перехвата, если executor не поддерживает hookmetamethod
-    if not HooksSupported then
-        pcall(function()
-            local mt = getrawmetatable(game)
-            local oldIndex = mt.__index
-            setreadonly(mt, false)
-            mt.__index = newcclosure(function(self, key)
-                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
-                    if TargetPart and self == Mouse then
-                        if key == "Hit" then
-                            return TargetPart.CFrame
-                        elseif key == "Target" then
-                            return TargetPart
-                        end
-                    end
+    -- 2. Перехват лучей от камеры (ViewportPointToRay / ScreenPointToRay)
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+        if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
+            if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
+                local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                if TargetPart then
+                    local OriginPos = Camera.CFrame.Position
+                    local Direction = (TargetPart.Position - OriginPos).Unit * 1000
+                    return Ray.new(OriginPos, Direction)
                 end
-                return oldIndex(self, key)
-            end)
-            setreadonly(mt, true)
-        end)
-    end
+            end
+        end
+        return oldNamecall(self, ...)
+    end)
 
     -- ==========================================
     -- ЕДИНЫЙ ЦИКЛ ОБРАБОТКИ (RENDERSTEPPED)
@@ -145,7 +164,6 @@ return function(Window)
     RunService.RenderStepped:Connect(function()
         local CurrentMurderer = nil
 
-        -- Проходим по игрокам один раз для оптимизации
         for _, Player in ipairs(Players:GetPlayers()) do
             if Player ~= LocalPlayer and Player.Character then
                 local isMurderer = (Player.Character:FindFirstChild("Knife") or 
@@ -153,12 +171,13 @@ return function(Window)
                 
                 if isMurderer then
                     local humanoid = Player.Character:FindFirstChildOfClass("Humanoid")
-                    if humanoid and humanoid.Health > 0 then
+                    -- Мардер считается валидным, если он жив И виден (нет преград)
+                    if humanoid and humanoid.Health > 0 and IsVisible(Player) then
                         CurrentMurderer = Player
                     end
                 end
 
-                -- Логика хитбоксов (Твоя оригинальная функция)
+                -- Логика контроля хитбоксов
                 if HitboxEnabled then
                     local head = Player.Character:FindFirstChild("Head")
                     if head and head:IsA("BasePart") then
@@ -188,21 +207,20 @@ return function(Window)
             end
         end
 
-        -- Логика расчёта таймингов Автоаима
+        -- Вычисление задержки реакции и автовыстрел
         if AimEnabled and CurrentMurderer then
             if CurrentMurderer ~= LastTarget then
                 LastTarget = CurrentMurderer
-                TargetTime = tick() -- Сбрасываем таймер при новой цели
+                TargetTime = tick() 
             end
 
-            local elapsed = (tick() - TargetTime) * 1000 -- Переводим в миллисекунды
+            local elapsed = (tick() - TargetTime) * 1000 
             if elapsed >= AimReactionTime then
                 AimTarget = CurrentMurderer
 
-                -- Автоматическая активация выстрела (если пушка в руках)
                 if AutoShootEnabled then
                     local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
-                    if Gun and (tick() - LastShotTime > 0.5) then -- Защита от спама/краша скрипта оружейного модуля
+                    if Gun and (tick() - LastShotTime > 0.4) then 
                         LastShotTime = tick()
                         Gun:Activate()
                     end
