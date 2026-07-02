@@ -119,7 +119,7 @@ return function(Window)
     })
 
     -- ==========================================
-    -- КИЛЛ-ВИЗУАЛ: ПЕРЕХВАТ ВСЕХ ЛУЧЕЙ ИГРЫ
+    -- ХУКИ И ПЕРЕХВАТ ДАННЫХ (МЕТАТАБЛИЦЫ)
     -- ==========================================
     local Hooked = false
     local hasHook = typeof(hookmetamethod) == "function"
@@ -131,10 +131,16 @@ return function(Window)
             local oldIndex
             oldIndex = hookmetamethod(game, "__index", function(self, key)
                 if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
-                    if TargetPart and (self == Mouse or self == LocalPlayer:GetMouse()) then
-                        if key == "Hit" then return TargetPart.CFrame
-                        elseif key == "Target" then return TargetPart end
+                    -- Проверяем, является ли объект ЛЮБОЙ мышкой в игре
+                    local isMouse = false
+                    pcall(function() isMouse = self:IsA("Mouse") end)
+                    
+                    if isMouse then
+                        local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
+                        if TargetPart then
+                            if key == "Hit" then return TargetPart.CFrame
+                            elseif key == "Target" then return TargetPart end
+                        end
                     end
                 end
                 return oldIndex(self, key)
@@ -149,25 +155,27 @@ return function(Window)
                     local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
                     
                     if TargetPart then
-                        -- 1. Перехват старых лучей мыши
+                        -- 1. Перехват отправки координат выстрела на сервер MM2 (Защита от "стреляет по мышке")
+                        if method == "FireServer" or method == "InvokeServer" then
+                            if self.Name == "Shoot" or self.Name == "ShootGun" or (self.Parent and self.Parent:IsA("Tool")) then
+                                for i, arg in ipairs(args) do
+                                    if typeof(arg) == "Vector3" then
+                                        args[i] = TargetPart.Position -- Принудительно меняем точку клика мыши на голову Мардера
+                                    end
+                                end
+                                return oldNamecall(self, unpack(args))
+                            end
+                        end
+
+                        -- 2. Перехват лучей (Raycast)
                         if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
                             local OriginPos = Camera.CFrame.Position
                             local Direction = (TargetPart.Position - OriginPos).Unit * 1000
                             return Ray.new(OriginPos, Direction)
-                        
-                        -- 2. Перехват современного Raycast (используется в новых пушках)
                         elseif method == "Raycast" and self == workspace then
                             local origin = args[1]
                             if typeof(origin) == "Vector3" then
                                 args[2] = (TargetPart.Position - origin).Unit * 1000
-                                return oldNamecall(self, unpack(args))
-                            end
-                            
-                        -- 3. Резервный перехват старых методов лучей движка
-                        elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhiteList" then
-                            local oldRay = args[1]
-                            if typeof(oldRay) == "Ray" then
-                                args[1] = Ray.new(oldRay.Origin, (TargetPart.Position - oldRay.Origin).Unit * 1000)
                                 return oldNamecall(self, unpack(args))
                             end
                         end
@@ -179,7 +187,7 @@ return function(Window)
         end)
     end
 
-    -- Старый метод для мобильных или простых читов (если hookmetamethod не поддерживается)
+    -- Резервный метод для простых/мобильных читов
     if not Hooked and typeof(getrawmetatable) == "function" and typeof(setreadonly) == "function" and typeof(newcclosure) == "function" and hasCheck and hasNamecallGetter then
         pcall(function()
             local mt = getrawmetatable(game)
@@ -190,10 +198,14 @@ return function(Window)
             
             mt.__index = newcclosure(function(self, key)
                 if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
-                    if TargetPart and (self == Mouse or self == LocalPlayer:GetMouse()) then
-                        if key == "Hit" then return TargetPart.CFrame
-                        elseif key == "Target" then return TargetPart end
+                    local isMouse = false
+                    pcall(function() isMouse = self:IsA("Mouse") end)
+                    if isMouse then
+                        local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
+                        if TargetPart then
+                            if key == "Hit" then return TargetPart.CFrame
+                            elseif key == "Target" then return TargetPart end
+                        end
                     end
                 end
                 return oldIndex(self, key)
@@ -205,22 +217,20 @@ return function(Window)
                 if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
                     local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
                     if TargetPart then
+                        if method == "FireServer" or method == "InvokeServer" then
+                            if self.Name == "Shoot" or (self.Parent and self.Parent:IsA("Tool")) then
+                                for i, arg in ipairs(args) do
+                                    if typeof(arg) == "Vector3" then
+                                        args[i] = TargetPart.Position
+                                    end
+                                end
+                                return oldNamecall(self, unpack(args))
+                            end
+                        end
                         if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
                             local OriginPos = Camera.CFrame.Position
                             local Direction = (TargetPart.Position - OriginPos).Unit * 1000
                             return Ray.new(OriginPos, Direction)
-                        elseif method == "Raycast" and self == workspace then
-                            local origin = args[1]
-                            if typeof(origin) == "Vector3" then
-                                args[2] = (TargetPart.Position - origin).Unit * 1000
-                                return oldNamecall(self, unpack(args))
-                            end
-                        elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" then
-                            local oldRay = args[1]
-                            if typeof(oldRay) == "Ray" then
-                                args[1] = Ray.new(oldRay.Origin, (TargetPart.Position - oldRay.Origin).Unit * 1000)
-                                return oldNamecall(self, unpack(args))
-                            end
                         end
                     end
                 end
@@ -250,7 +260,7 @@ return function(Window)
                     end
                 end
 
-                -- Логика контроля хитбоксов
+                -- Контроль хитбоксов
                 if HitboxEnabled then
                     local head = Player.Character:FindFirstChild("Head")
                     if head and head:IsA("BasePart") then
@@ -280,7 +290,7 @@ return function(Window)
             end
         end
 
-        -- Вычисление таргета и автовыстрел
+        -- Обработка задержки и автоматический выстрел
         if AimEnabled and CurrentMurderer then
             if CurrentMurderer ~= LastTarget then
                 LastTarget = CurrentMurderer
