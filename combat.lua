@@ -119,12 +119,17 @@ return function(Window)
     })
 
     -- ==========================================
-    -- БЕЗОПАСНЫЙ ПЕРЕХВАТ ДВИЖКА ИГРЫ (HOOKS)
+    -- ЗАЩИЩЕННЫЙ ПЕРЕХВАТ ДВИЖКА ИГРЫ (HOOKS)
     -- ==========================================
     local Hooked = false
 
-    -- Способ №1: Современный hookmetamethod (если поддерживается)
-    if hookmetamethod and checkcaller then
+    -- Проверяем типы окружения на уровне архитектуры эксэкутора во избежание нил-вызовов
+    local hasHook = typeof(hookmetamethod) == "function"
+    local hasCheck = typeof(checkcaller) == "function"
+    local hasNamecallGetter = typeof(getnamecallmethod) == "function"
+
+    -- Метод №1: hookmetamethod
+    if hasHook and hasCheck then
         pcall(function()
             local oldIndex
             oldIndex = hookmetamethod(game, "__index", function(self, key)
@@ -138,27 +143,29 @@ return function(Window)
                 return oldIndex(self, key)
             end)
 
-            local oldNamecall
-            oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-                local method = getnamecallmethod()
-                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
-                        local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
-                        if TargetPart then
-                            local OriginPos = Camera.CFrame.Position
-                            local Direction = (TargetPart.Position - OriginPos).Unit * 1000
-                            return Ray.new(OriginPos, Direction)
+            if hasNamecallGetter then
+                local oldNamecall
+                oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+                    local method = getnamecallmethod()
+                    if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
+                        if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
+                            local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                            if TargetPart then
+                                local OriginPos = Camera.CFrame.Position
+                                local Direction = (TargetPart.Position - OriginPos).Unit * 1000
+                                return Ray.new(OriginPos, Direction)
+                            end
                         end
                     end
-                end
-                return oldNamecall(self, ...)
-            end)
+                    return oldNamecall(self, ...)
+                end)
+            end
             Hooked = true
         end)
     end
 
-    -- Способ №2: Классический getrawmetatable (для мобильных или старых читов)
-    if not Hooked and getrawmetatable and setreadonly and newcclosure and checkcaller then
+    -- Метод №2: getrawmetatable (резервный для простых/мобильных читов)
+    if not Hooked and typeof(getrawmetatable) == "function" and typeof(setreadonly) == "function" and typeof(newcclosure) == "function" and hasCheck then
         pcall(function()
             local mt = getrawmetatable(game)
             local oldIndex = mt.__index
@@ -177,20 +184,22 @@ return function(Window)
                 return oldIndex(self, key)
             end)
             
-            mt.__namecall = newcclosure(function(self, ...)
-                local method = getnamecallmethod()
-                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
-                        local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
-                        if TargetPart then
-                            local OriginPos = Camera.CFrame.Position
-                            local Direction = (TargetPart.Position - OriginPos).Unit * 1000
-                            return Ray.new(OriginPos, Direction)
+            if hasNamecallGetter then
+                mt.__namecall = newcclosure(function(self, ...)
+                    local method = getnamecallmethod()
+                    if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
+                        if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
+                            local TargetPart = AimTarget.Character:FindFirstChild("HumanoidRootPart") or AimTarget.Character:FindFirstChild("Head")
+                            if TargetPart then
+                                local OriginPos = Camera.CFrame.Position
+                                local Direction = (TargetPart.Position - OriginPos).Unit * 1000
+                                return Ray.new(OriginPos, Direction)
+                            end
                         end
                     end
-                end
-                return oldNamecall(self, ...)
-            end)
+                    return oldNamecall(self, ...)
+                end)
+            end
             
             setreadonly(mt, true)
             Hooked = true
