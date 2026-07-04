@@ -149,6 +149,7 @@ return function(Window)
             local oldIndex
             oldIndex = hookmetamethod(game, "__index", function(self, key)
                 if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
+                    -- Проверяем, является ли объект ЛЮБОЙ мышкой в игре
                     local isMouse = false
                     pcall(function() isMouse = self:IsA("Mouse") end)
                     
@@ -172,17 +173,19 @@ return function(Window)
                     local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
                     
                     if TargetPart then
+                        -- 1. Перехват отправки координат выстрела на сервер MM2 (Защита от "стреляет по мышке")
                         if method == "FireServer" or method == "InvokeServer" then
                             if self.Name == "Shoot" or self.Name == "ShootGun" or (self.Parent and self.Parent:IsA("Tool")) then
                                 for i, arg in ipairs(args) do
                                     if typeof(arg) == "Vector3" then
-                                        args[i] = TargetPart.Position
+                                        args[i] = TargetPart.Position -- Принудительно меняем точку клика мыши на голову Мардера
                                     end
                                 end
                                 return oldNamecall(self, unpack(args))
                             end
                         end
 
+                        -- 2. Перехват лучей (Raycast)
                         if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
                             local OriginPos = Camera.CFrame.Position
                             local Direction = (TargetPart.Position - OriginPos).Unit * 1000
@@ -202,6 +205,7 @@ return function(Window)
         end)
     end
 
+    -- Резервный метод для простых/мобильных читов
     if not Hooked and typeof(getrawmetatable) == "function" and typeof(setreadonly) == "function" and typeof(newcclosure) == "function" and hasCheck and hasNamecallGetter then
         pcall(function()
             local mt = getrawmetatable(game)
@@ -328,75 +332,31 @@ return function(Window)
             AimTarget = nil
         end
 
-        -- ==========================================
-        -- СВЕРХТОЧНАЯ ЛОГИКА ТРИГГЕРБОТА (DEAD CENTER)
-        -- ==========================================
+        -- ЛОГИКА ТРИГГЕРБОТА (TRIGGER BOT)
         if TriggerBotEnabled then
             local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
-            
-            -- Проверяем наличие пистолета в руках и кулдаун стрельбы (0.4 сек)
+            -- Проверяем, держит ли игрок пистолет в руках и прошла ли перезарядка (0.4 сек)
             if Gun and (tick() - LastTriggerShotTime > 0.4) then 
-                local rayParams = RaycastParams.new()
-                rayParams.FilterType = Enum.RaycastFilterType.Exclude
-                rayParams.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
-                rayParams.IgnoreWater = true
-                
-                -- Бросаем точечный луч по координатам мыши
-                local unitRay = Camera:ScreenPointToRay(Mouse.X, Mouse.Y)
-                local rayResult = workspace:Raycast(unitRay.Origin, unitRay.Direction * 1000, rayParams)
-                
-                if rayResult and rayResult.Instance then
-                    local targetPart = rayResult.Instance
+                local targetPart = Mouse.Target
+                if targetPart then
+                    -- Находим модель персонажа, которой принадлежит часть тела под курсором
                     local characterModel = targetPart:FindFirstAncestorOfClass("Model")
                     local hoveredPlayer = characterModel and Players:GetPlayerFromCharacter(characterModel)
                     
-                    -- Проверяем, что цель — живой Мардер
+                    -- Проверяем, что цель — это другой живой игрок
                     if hoveredPlayer and hoveredPlayer ~= LocalPlayer and hoveredPlayer.Character then
                         local isMurderer = (hoveredPlayer.Character:FindFirstChild("Knife") or 
                                            (hoveredPlayer:FindFirstChild("Backpack") and hoveredPlayer.Backpack:FindFirstChild("Knife")))
                         local humanoid = hoveredPlayer.Character:FindFirstChildOfClass("Humanoid")
                         
+                        -- Если игрок под прицелом — Мардер и он жив, стреляем
                         if isMurderer and humanoid and humanoid.Health > 0 then
-                            local head = hoveredPlayer.Character:FindFirstChild("Head")
-                            local root = hoveredPlayer.Character:FindFirstChild("HumanoidRootPart")
-                            
-                            local origin = unitRay.Origin
-                            local direction = unitRay.Direction.Unit
-                            local minDistance = 999
-                            
-                            -- Математический просчет расстояния луча до геометрического центра ГОЛОВЫ
-                            if head then
-                                local v = head.Position - origin
-                                local proj = v:Dot(direction)
-                                if proj > 0 then
-                                    local closestPoint = origin + (direction * proj)
-                                    local dist = (closestPoint - head.Position).Magnitude
-                                    if dist < minDistance then minDistance = dist end
-                                end
-                            end
-                            
-                            -- Математический просчет расстояния луча до геометрического центра ТОРСА (HumanoidRootPart)
-                            if root then
-                                local v = root.Position - origin
-                                local proj = v:Dot(direction)
-                                if proj > 0 then
-                                    local closestPoint = origin + (direction * proj)
-                                    local dist = (closestPoint - root.Position).Magnitude
-                                    if dist < minDistance then minDistance = dist end
-                                end
-                            end
-                            
-                            -- Идеальный порог точности: 0.4 студа. 
-                            -- Выстрел произойдет ТОЛЬКО если прицел наведен строго на центральную ось кости.
-                            if minDistance <= 0.4 then
-                                LastTriggerShotTime = tick()
-                                Gun:Activate()
-                            end
+                            LastTriggerShotTime = tick()
+                            Gun:Activate()
                         end
                     end
                 end
             end
         end
-        
     end)
 end
