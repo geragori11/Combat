@@ -329,7 +329,7 @@ return function(Window)
         end
 
         -- ==========================================
-        -- ОБНОВЛЕННАЯ ВЫСОКОТОЧНАЯ ЛОГИКА ТРИГГЕРБОТА
+        -- СВЕРХТОЧНАЯ ЛОГИКА ТРИГГЕРБОТА (DEAD CENTER)
         -- ==========================================
         if TriggerBotEnabled then
             local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
@@ -341,7 +341,7 @@ return function(Window)
                 rayParams.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
                 rayParams.IgnoreWater = true
                 
-                -- Бросаем точнейший луч из центра экрана / положения мыши
+                -- Бросаем точечный луч по координатам мыши
                 local unitRay = Camera:ScreenPointToRay(Mouse.X, Mouse.Y)
                 local rayResult = workspace:Raycast(unitRay.Origin, unitRay.Direction * 1000, rayParams)
                 
@@ -357,31 +357,40 @@ return function(Window)
                         local humanoid = hoveredPlayer.Character:FindFirstChildOfClass("Humanoid")
                         
                         if isMurderer and humanoid and humanoid.Health > 0 then
-                            local rootPart = hoveredPlayer.Character:FindFirstChild("HumanoidRootPart")
-                            local headPart = hoveredPlayer.Character:FindFirstChild("Head")
+                            local head = hoveredPlayer.Character:FindFirstChild("Head")
+                            local root = hoveredPlayer.Character:FindFirstChild("HumanoidRootPart")
                             
-                            if rootPart or headPart then
-                                -- Вычисляем реальный центр модели врага (сквозь увеличенные хитбоксы)
-                                local centerPos = rootPart and rootPart.Position or headPart.Position
-                                local origin = unitRay.Origin
-                                local direction = unitRay.Direction.Unit
-                                
-                                -- Математический расчет перпендикуляра от луча прицела до центра Мардера
-                                local v = centerPos - origin
+                            local origin = unitRay.Origin
+                            local direction = unitRay.Direction.Unit
+                            local minDistance = 999
+                            
+                            -- Математический просчет расстояния луча до геометрического центра ГОЛОВЫ
+                            if head then
+                                local v = head.Position - origin
                                 local proj = v:Dot(direction)
-                                
                                 if proj > 0 then
                                     local closestPoint = origin + (direction * proj)
-                                    local crosshairDistance = (closestPoint - centerPos).Magnitude
-                                    
-                                    -- Порог точности (в студах). 
-                                    -- 2.5 студа — это идеальная ширина хитбокса обычного игрока.
-                                    -- Скрипт будет ждать, пока прицел наведется строго на середину тела.
-                                    if crosshairDistance <= 2.5 then
-                                        LastTriggerShotTime = tick()
-                                        Gun:Activate()
-                                    end
+                                    local dist = (closestPoint - head.Position).Magnitude
+                                    if dist < minDistance then minDistance = dist end
                                 end
+                            end
+                            
+                            -- Математический просчет расстояния луча до геометрического центра ТОРСА (HumanoidRootPart)
+                            if root then
+                                local v = root.Position - origin
+                                local proj = v:Dot(direction)
+                                if proj > 0 then
+                                    local closestPoint = origin + (direction * proj)
+                                    local dist = (closestPoint - root.Position).Magnitude
+                                    if dist < minDistance then minDistance = dist end
+                                end
+                            end
+                            
+                            -- Идеальный порог точности: 0.4 студа. 
+                            -- Выстрел произойдет ТОЛЬКО если прицел наведен строго на центральную ось кости.
+                            if minDistance <= 0.4 then
+                                LastTriggerShotTime = tick()
+                                Gun:Activate()
                             end
                         end
                     end
