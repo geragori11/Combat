@@ -21,6 +21,10 @@ return function(Window)
     local TargetTime = 0
     local LastShotTime = 0
 
+    -- --- ПЕРЕМЕННЫЕ ТРИГГЕРБОТА ---
+    local TriggerBotEnabled = false
+    local LastTriggerShotTime = 0
+
     -- ==========================================
     -- ФУНКЦИЯ ПРОВЕРКИ СТЕН (WALL CHECK)
     -- ==========================================
@@ -115,6 +119,20 @@ return function(Window)
         Flag = "AutoShootToggle",
         Callback = function(Value)
             AutoShootEnabled = Value
+        end
+    })
+
+    -- ==========================================
+    -- СЕКЦИЯ: TRIGGER BOT
+    -- ==========================================
+    CombatTab:CreateSection("Trigger Bot")
+
+    CombatTab:CreateToggle({
+        Name = "Включить Триггербот (Auto Fire)",
+        CurrentValue = false,
+        Flag = "TriggerBotToggle",
+        Callback = function(Value)
+            TriggerBotEnabled = Value
         end
     })
 
@@ -251,7 +269,7 @@ return function(Window)
         for _, Player in ipairs(Players:GetPlayers()) do
             if Player ~= LocalPlayer and Player.Character then
                 local isMurderer = (Player.Character:FindFirstChild("Knife") or 
-                                   (Player:FindFirstChild("Backpack") and Player.Backpack:FindFirstChild("Knife")))
+                                    (Player:FindFirstChild("Backpack") and Player.Backpack:FindFirstChild("Knife")))
                 
                 if isMurderer then
                     local humanoid = Player.Character:FindFirstChildOfClass("Humanoid")
@@ -290,7 +308,7 @@ return function(Window)
             end
         end
 
-        -- Обработка задержки и автоматический выстрел
+        -- Обработка задержки и автоматический выстрел (Silent Aim)
         if AimEnabled and CurrentMurderer then
             if CurrentMurderer ~= LastTarget then
                 LastTarget = CurrentMurderer
@@ -308,12 +326,37 @@ return function(Window)
                         Gun:Activate()
                     end
                 end
-            else
-                AimTarget = nil
             end
         else
             LastTarget = nil
             AimTarget = nil
+        end
+
+        -- ЛОГИКА ТРИГГЕРБОТА (TRIGGER BOT)
+        if TriggerBotEnabled then
+            local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
+            -- Проверяем, держит ли игрок пистолет в руках и прошла ли перезарядка (0.4 сек)
+            if Gun and (tick() - LastTriggerShotTime > 0.4) then 
+                local targetPart = Mouse.Target
+                if targetPart then
+                    -- Находим модель персонажа, которой принадлежит часть тела под курсором
+                    local characterModel = targetPart:FindFirstAncestorOfClass("Model")
+                    local hoveredPlayer = characterModel and Players:GetPlayerFromCharacter(characterModel)
+                    
+                    -- Проверяем, что цель — это другой живой игрок
+                    if hoveredPlayer and hoveredPlayer ~= LocalPlayer and hoveredPlayer.Character then
+                        local isMurderer = (hoveredPlayer.Character:FindFirstChild("Knife") or 
+                                           (hoveredPlayer:FindFirstChild("Backpack") and hoveredPlayer.Backpack:FindFirstChild("Knife")))
+                        local humanoid = hoveredPlayer.Character:FindFirstChildOfClass("Humanoid")
+                        
+                        -- Если игрок под прицелом — Мардер и он жив, стреляем
+                        if isMurderer and humanoid and humanoid.Health > 0 then
+                            LastTriggerShotTime = tick()
+                            Gun:Activate()
+                        end
+                    end
+                end
+            end
         end
     end)
 end
