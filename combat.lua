@@ -1,3 +1,32 @@
+-- =========================================================================
+-- Murder Mystery 2: Универсальный Rage Multipoint Aimbot + UI Wrapper
+-- Адаптация под ограничения Xeno Executor (Bypass через Camera-Lock)
+-- Логика: Предгенерация 317 точек -> Многоточечный Raycast-Шторм -> Клик
+-- =========================================================================
+
+local OFFSETS_HEAD = {}
+local OFFSETS_TORSO = {}
+local OFFSETS_LIMBS = {}
+
+-- Предгенерация сетки смещений (Матрица точек)
+local function precomputeGrid(steps, targetTable)
+    for x = 1, steps do
+        for y = 1, steps do
+            for z = 1, steps do
+                table.insert(targetTable, Vector3.new(
+                    -0.5 + (x - 1) / (steps - 1),
+                    -0.5 + (y - 1) / (steps - 1),
+                    -0.5 + (z - 1) / (steps - 1)
+                ))
+            end
+        end
+    end
+end
+
+precomputeGrid(4, OFFSETS_HEAD)   -- 64 точки
+precomputeGrid(5, OFFSETS_TORSO)  -- 125 точек
+precomputeGrid(4, OFFSETS_LIMBS)  -- 64 точки на каждую конечность
+
 return function(Window)
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
@@ -35,10 +64,6 @@ return function(Window)
     local wallCheckParams = RaycastParams.new()
     wallCheckParams.FilterType = Enum.RaycastFilterType.Exclude
     wallCheckParams.IgnoreWater = true
-
-    local trajectoryCheckParams = RaycastParams.new()
-    trajectoryCheckParams.FilterType = Enum.RaycastFilterType.Exclude
-    trajectoryCheckParams.IgnoreWater = true
 
     -- ==========================================
     -- ФУНКЦИЯ ПРОВЕРКИ СТЕН (WALL CHECK ДЛЯ SILENT AIM)
@@ -313,7 +338,7 @@ return function(Window)
                     end
                 end
 
-                -- Контроль хитбоксов
+                -- Контроль динамического изменения хитбоксов
                 if HitboxEnabled then
                     local head = Player.Character:FindFirstChild("Head")
                     if head and head:IsA("BasePart") then
@@ -339,11 +364,10 @@ return function(Window)
                         end
                     end
                 end
-
             end
         end
 
-        -- 2. Логика HvH Snap Aimbot (Ваш оптимизированный скрипт под Xeno)
+        -- 2. Логика Интегрированного Rage Multipoint Aimbot (HvH Snap)
         if HvHAimEnabled then
             local char = LocalPlayer.Character
             if char and char:FindFirstChild("Humanoid") then
@@ -351,12 +375,12 @@ return function(Window)
                 local gun = char:FindFirstChild("Gun") or (backpack and backpack:FindFirstChild("Gun"))
 
                 if gun then
-                    -- Авто-экипировка (если включена)
+                    -- Авто-экипировка пистолета
                     if gun.Parent == backpack then
                         if HvHAutoEquip then
                             char.Humanoid:EquipTool(gun)
                         end
-                    -- Работаем, только если пистолет в руках
+                    -- Работает только в том случае, если пистолет находится в руках персонажа
                     elseif gun.Parent == char then
                         local hvhMurderer = nil
                         for _, p in ipairs(Players:GetPlayers()) do
@@ -370,47 +394,74 @@ return function(Window)
 
                         if hvhMurderer and hvhMurderer.Character then
                             local mChar = hvhMurderer.Character
-                            local targetPart = mChar:FindFirstChild("HumanoidRootPart") or mChar:FindFirstChild("Torso") or mChar:FindFirstChild("Head")
                             
-                            if targetPart then
-                                local cameraPos = Camera.CFrame.Position
-                                local targetPos = targetPart.Position
-                                local direction = targetPos - cameraPos
+                            -- Исключаем из коллизий лучей себя и элементы одежды цели
+                            if LocalPlayer.Character then
+                                wallCheckParams.FilterDescendantsInstances = {LocalPlayer.Character, mChar:GetChildren()}
+                            end
 
-                                -- Проверка видимости через стены карты
-                                wallCheckParams.FilterDescendantsInstances = {char, mChar}
-                                local wallResult = workspace:Raycast(cameraPos, direction, wallCheckParams)
+                            -- Хитбоксы по приоритету Rage (Голова -> Тело -> Ноги)
+                            local hitboxes = {
+                                {part = mChar:FindFirstChild("Head"), offsets = OFFSETS_HEAD, priority = 3},
+                                {part = mChar:FindFirstChild("Torso") or mChar:FindFirstChild("UpperTorso"), offsets = OFFSETS_TORSO, priority = 2},
+                                {part = mChar:FindFirstChild("Left Leg") or mChar:FindFirstChild("LeftLowerLeg"), offsets = OFFSETS_LIMBS, priority = 1},
+                                {part = mChar:FindFirstChild("Right Leg") or mChar:FindFirstChild("RightLowerLeg"), offsets = OFFSETS_LIMBS, priority = 1}
+                            }
+
+                            local cameraPos = Camera.CFrame.Position
+                            local bestPointFound = nil
+                            local maxPriority = 0
+
+                            -- Многоточечный сканирующий шторм (317 точек)
+                            for i = 1, #hitboxes do
+                                local data = hitboxes[i]
+                                local part = data.part
                                 
-                                local isVisibleHvH = (wallResult == nil)
-                                if isVisibleHvH then
-                                    -- Моментальный жесткий Snap прицела на цель
-                                    Camera.CFrame = CFrame.lookAt(cameraPos, targetPos)
-
-                                    -- Блок автоматического выстрела с траекторным анализом (Anti-Green Shot)
-                                    local currentTime = os.clock()
-                                    if currentTime - lastShotTime >= SHOT_COOLDOWN then
-                                        trajectoryCheckParams.FilterDescendantsInstances = {char}
-                                        local extendedDirection = direction.Unit * (direction.Magnitude + 1)
-                                        local trajResult = workspace:Raycast(cameraPos, extendedDirection, trajectoryCheckParams)
-
-                                        if trajResult and trajResult.Instance then
-                                            local hitInstance = trajResult.Instance
-                                            -- Полная проверка на попадание именно в маньяка
-                                            if hitInstance:IsDescendantOf(mChar) then
-                                                lastShotTime = currentTime
-                                                
-                                                local screenSize = Camera.ViewportSize
-                                                local centerX = screenSize.X / 2
-                                                local centerY = screenSize.Y / 2
-                                                
-                                                -- Синхронный клик через эмуляцию ввода Xeno
-                                                VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-                                                task.defer(function()
-                                                    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-                                                end)
-                                            end
+                                if part and part:IsA("BasePart") and data.priority > maxPriority then
+                                    local partCFrame = part.CFrame
+                                    local partSize = part.Size
+                                    
+                                    local cpos = partCFrame.Position
+                                    local right = partCFrame.RightVector
+                                    local up = partCFrame.UpVector
+                                    local look = partCFrame.LookVector
+                                    local offsets = data.offsets
+                                    
+                                    for j = 1, #offsets do
+                                        local offset = offsets[j]
+                                        local worldPoint = cpos + (right * (offset.X * partSize.X)) + (up * (offset.Y * partSize.Y)) + (look * (offset.Z * partSize.Z))
+                                        local direction = worldPoint - cameraPos
+                                        
+                                        local result = workspace:Raycast(cameraPos, direction, wallCheckParams)
+                                        
+                                        -- Если до конкретной фантомной точки нет преград — фиксируем ее
+                                        if not result then
+                                            bestPointFound = worldPoint
+                                            maxPriority = data.priority
+                                            break -- Нашли лучшую видимую точку на данном хитбоксе
                                         end
                                     end
+                                end
+                            end
+
+                            -- Если простреливаемая точка найдена — производим захват и выстрел
+                            if bestPointFound then
+                                -- Мгновенная жесткая доводка камеры (Bypass для ограничений Xeno)
+                                Camera.CFrame = CFrame.lookAt(cameraPos, bestPointFound)
+
+                                local currentTime = os.clock()
+                                if currentTime - lastShotTime >= SHOT_COOLDOWN then
+                                    lastShotTime = currentTime
+                                    
+                                    local screenSize = Camera.ViewportSize
+                                    local centerX = screenSize.X / 2
+                                    local centerY = screenSize.Y / 2
+                                    
+                                    -- Эмуляция клика строго по центру экрана
+                                    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+                                    task.defer(function()
+                                        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+                                    end)
                                 end
                             end
                         end
@@ -430,7 +481,7 @@ return function(Window)
             if elapsed >= AimReactionTime then
                 AimTarget = CurrentMurderer
 
-                if AutoShootEnabled and not HvHAimEnabled then -- Отключаем автошот сайлента, если работает жесткий HvH Snap
+                if AutoShootEnabled and not HvHAimEnabled then
                     local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
                     if Gun and (tick() - LastShotTime > 0.4) then 
                         LastShotTime = tick()
