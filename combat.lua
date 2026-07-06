@@ -1,6 +1,7 @@
 return function(Window)
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
+    local VirtualInputManager = game:GetService("VirtualInputManager")
     local LocalPlayer = Players.LocalPlayer
     local Mouse = LocalPlayer:GetMouse()
     local Camera = workspace.CurrentCamera
@@ -12,7 +13,7 @@ return function(Window)
     local HitboxSize = 15
     local OriginalSizes = {} 
     
-    -- --- ПЕРЕМЕННЫЕ АВТОАИМА ---
+    -- --- ПЕРЕМЕННЫЕ АВТОАИМА (SILENT) ---
     local AimEnabled = false
     local AimReactionTime = 0 
     local AutoShootEnabled = false
@@ -25,8 +26,22 @@ return function(Window)
     local TriggerBotEnabled = false
     local LastTriggerShotTime = 0
 
+    -- --- ПЕРЕМЕННЫЕ HVH SNAP AIMBOT (XENO) ---
+    local HvHAimEnabled = false
+    local HvHAutoEquip = false
+    local SHOT_COOLDOWN = 0.53
+    local lastShotTime = 0
+
+    local wallCheckParams = RaycastParams.new()
+    wallCheckParams.FilterType = Enum.RaycastFilterType.Exclude
+    wallCheckParams.IgnoreWater = true
+
+    local trajectoryCheckParams = RaycastParams.new()
+    trajectoryCheckParams.FilterType = Enum.RaycastFilterType.Exclude
+    trajectoryCheckParams.IgnoreWater = true
+
     -- ==========================================
-    -- ФУНКЦИЯ ПРОВЕРКИ СТЕН (WALL CHECK)
+    -- ФУНКЦИЯ ПРОВЕРКИ СТЕН (WALL CHECK ДЛЯ SILENT AIM)
     -- ==========================================
     local function IsVisible(TargetPlayer)
         local Character = LocalPlayer.Character
@@ -137,7 +152,30 @@ return function(Window)
     })
 
     -- ==========================================
-    -- ХУКИ И ПЕРЕХВАТ ДАННЫХ (МЕТАТАБЛИЦЫ)
+    -- СЕКЦИЯ: HVH SNAP AIMBOT (XENO EXECUTOR)
+    -- ==========================================
+    CombatTab:CreateSection("HvH Snap Aimbot (Xeno)")
+
+    CombatTab:CreateToggle({
+        Name = "Включить HvH Snap Аим",
+        CurrentValue = false,
+        Flag = "HvHAimToggle",
+        Callback = function(Value)
+            HvHAimEnabled = Value
+        end
+    })
+
+    CombatTab:CreateToggle({
+        Name = "Авто-экипировка пистолета",
+        CurrentValue = false,
+        Flag = "HvHAutoEquipToggle",
+        Callback = function(Value)
+            HvHAutoEquip = Value
+        end
+    })
+
+    -- ==========================================
+    -- ХУКИ И ПЕРЕХВАТ ДАННЫХ (МЕТАТАБЛИЦЫ ДЛЯ SILENT AIM)
     -- ==========================================
     local Hooked = false
     local hasHook = typeof(hookmetamethod) == "function"
@@ -149,7 +187,6 @@ return function(Window)
             local oldIndex
             oldIndex = hookmetamethod(game, "__index", function(self, key)
                 if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    -- Проверяем, является ли объект ЛЮБОЙ мышкой в игре
                     local isMouse = false
                     pcall(function() isMouse = self:IsA("Mouse") end)
                     
@@ -173,19 +210,17 @@ return function(Window)
                     local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
                     
                     if TargetPart then
-                        -- 1. Перехват отправки координат выстрела на сервер MM2 (Защита от "стреляет по мышке")
                         if method == "FireServer" or method == "InvokeServer" then
                             if self.Name == "Shoot" or self.Name == "ShootGun" or (self.Parent and self.Parent:IsA("Tool")) then
                                 for i, arg in ipairs(args) do
                                     if typeof(arg) == "Vector3" then
-                                        args[i] = TargetPart.Position -- Принудительно меняем точку клика мыши на голову Мардера
+                                        args[i] = TargetPart.Position
                                     end
                                 end
                                 return oldNamecall(self, unpack(args))
                             end
                         end
 
-                        -- 2. Перехват лучей (Raycast)
                         if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
                             local OriginPos = Camera.CFrame.Position
                             local Direction = (TargetPart.Position - OriginPos).Unit * 1000
@@ -205,7 +240,6 @@ return function(Window)
         end)
     end
 
-    -- Резервный метод для простых/мобильных читов
     if not Hooked and typeof(getrawmetatable) == "function" and typeof(setreadonly) == "function" and typeof(newcclosure) == "function" and hasCheck and hasNamecallGetter then
         pcall(function()
             local mt = getrawmetatable(game)
@@ -266,6 +300,7 @@ return function(Window)
     RunService.RenderStepped:Connect(function()
         local CurrentMurderer = nil
 
+        -- 1. Сбор информации о Маньяке и Хитбоксах
         for _, Player in ipairs(Players:GetPlayers()) do
             if Player ~= LocalPlayer and Player.Character then
                 local isMurderer = (Player.Character:FindFirstChild("Knife") or 
@@ -308,7 +343,83 @@ return function(Window)
             end
         end
 
-        -- Обработка задержки и автоматический выстрел (Silent Aim)
+        -- 2. Логика HvH Snap Aimbot (Ваш оптимизированный скрипт под Xeno)
+        if HvHAimEnabled then
+            local char = LocalPlayer.Character
+            if char and char:FindFirstChild("Humanoid") then
+                local backpack = LocalPlayer:FindFirstChild("Backpack")
+                local gun = char:FindFirstChild("Gun") or (backpack and backpack:FindFirstChild("Gun"))
+
+                if gun then
+                    -- Авто-экипировка (если включена)
+                    if gun.Parent == backpack then
+                        if HvHAutoEquip then
+                            char.Humanoid:EquipTool(gun)
+                        end
+                    -- Работаем, только если пистолет в руках
+                    elseif gun.Parent == char then
+                        local hvhMurderer = nil
+                        for _, p in ipairs(Players:GetPlayers()) do
+                            if p ~= LocalPlayer and p.Character then
+                                if p.Character:FindFirstChild("Knife") or (p:FindFirstChild("Backpack") and p.Backpack:FindFirstChild("Knife")) then
+                                    hvhMurderer = p
+                                    break
+                                end
+                            end
+                        end
+
+                        if hvhMurderer and hvhMurderer.Character then
+                            local mChar = hvhMurderer.Character
+                            local targetPart = mChar:FindFirstChild("HumanoidRootPart") or mChar:FindFirstChild("Torso") or mChar:FindFirstChild("Head")
+                            
+                            if targetPart then
+                                local cameraPos = Camera.CFrame.Position
+                                local targetPos = targetPart.Position
+                                local direction = targetPos - cameraPos
+
+                                -- Проверка видимости через стены карты
+                                wallCheckParams.FilterDescendantsInstances = {char, mChar}
+                                local wallResult = workspace:Raycast(cameraPos, direction, wallCheckParams)
+                                
+                                local isVisibleHvH = (wallResult == nil)
+                                if isVisibleHvH then
+                                    -- Моментальный жесткий Snap прицела на цель
+                                    Camera.CFrame = CFrame.lookAt(cameraPos, targetPos)
+
+                                    -- Блок автоматического выстрела с траекторным анализом (Anti-Green Shot)
+                                    local currentTime = os.clock()
+                                    if currentTime - lastShotTime >= SHOT_COOLDOWN then
+                                        trajectoryCheckParams.FilterDescendantsInstances = {char}
+                                        local extendedDirection = direction.Unit * (direction.Magnitude + 1)
+                                        local trajResult = workspace:Raycast(cameraPos, extendedDirection, trajectoryCheckParams)
+
+                                        if trajResult and trajResult.Instance then
+                                            local hitInstance = trajResult.Instance
+                                            -- Полная проверка на попадание именно в маньяка
+                                            if hitInstance:IsDescendantOf(mChar) then
+                                                lastShotTime = currentTime
+                                                
+                                                local screenSize = Camera.ViewportSize
+                                                local centerX = screenSize.X / 2
+                                                local centerY = screenSize.Y / 2
+                                                
+                                                -- Синхронный клик через эмуляцию ввода Xeno
+                                                VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+                                                task.defer(function()
+                                                    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+                                                end)
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- 3. Обработка задержки и автоматический выстрел (Silent Aim)
         if AimEnabled and CurrentMurderer then
             if CurrentMurderer ~= LastTarget then
                 LastTarget = CurrentMurderer
@@ -319,7 +430,7 @@ return function(Window)
             if elapsed >= AimReactionTime then
                 AimTarget = CurrentMurderer
 
-                if AutoShootEnabled then
+                if AutoShootEnabled and not HvHAimEnabled then -- Отключаем автошот сайлента, если работает жесткий HvH Snap
                     local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
                     if Gun and (tick() - LastShotTime > 0.4) then 
                         LastShotTime = tick()
@@ -332,24 +443,20 @@ return function(Window)
             AimTarget = nil
         end
 
-        -- ЛОГИКА ТРИГГЕРБОТА (TRIGGER BOT)
-        if TriggerBotEnabled then
+        -- 4. ЛОГИКА ТРИГГЕРБОТА (TRIGGER BOT)
+        if TriggerBotEnabled and not HvHAimEnabled then
             local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
-            -- Проверяем, держит ли игрок пистолет в руках и прошла ли перезарядка (0.4 сек)
             if Gun and (tick() - LastTriggerShotTime > 0.4) then 
                 local targetPart = Mouse.Target
                 if targetPart then
-                    -- Находим модель персонажа, которой принадлежит часть тела под курсором
                     local characterModel = targetPart:FindFirstAncestorOfClass("Model")
                     local hoveredPlayer = characterModel and Players:GetPlayerFromCharacter(characterModel)
                     
-                    -- Проверяем, что цель — это другой живой игрок
                     if hoveredPlayer and hoveredPlayer ~= LocalPlayer and hoveredPlayer.Character then
                         local isMurderer = (hoveredPlayer.Character:FindFirstChild("Knife") or 
                                            (hoveredPlayer:FindFirstChild("Backpack") and hoveredPlayer.Backpack:FindFirstChild("Knife")))
                         local humanoid = hoveredPlayer.Character:FindFirstChildOfClass("Humanoid")
                         
-                        -- Если игрок под прицелом — Мардер и он жив, стреляем
                         if isMurderer and humanoid and humanoid.Health > 0 then
                             LastTriggerShotTime = tick()
                             Gun:Activate()
