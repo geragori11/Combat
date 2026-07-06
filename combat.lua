@@ -58,8 +58,8 @@ return function(Window)
     -- --- ПЕРЕМЕННЫЕ HVH SNAP AIMBOT (XENO) ---
     local HvHAimEnabled = false
     local HvHAutoEquip = false
-    local SHOT_COOLDOWN = 0.53
-    local lastShotTime = 0
+    local hvhlShotCooldown = 0.1   -- минимальный интервал для авто-выстрела
+    local lastHvHShotTime = 0
 
     local wallCheckParams = RaycastParams.new()
     wallCheckParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -353,7 +353,7 @@ return function(Window)
                             head.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
                             head.Transparency = 0.6 
                             head.CanCollide = false 
-                            head.Massless = true    
+                            head.Massless = true     
                         else
                             if OriginalSizes[Player] then
                                 head.Size = OriginalSizes[Player].Size
@@ -367,8 +367,13 @@ return function(Window)
             end
         end
 
-        -- 2. Логика Интегрированного Rage Multipoint Aimbot (HvH Snap)
+        -- 2. Логика Интегрированного Rage Multipoint Aimbot (HvH) - СИЛЕНТ ВЕРСИЯ
         if HvHAimEnabled then
+            -- Принудительно включаем Silent Aim и убираем задержку
+            AimEnabled = true
+            AimReactionTime = 0
+            AutoShootEnabled = false  -- выстрел будем производить самостоятельно
+
             local char = LocalPlayer.Character
             if char and char:FindFirstChild("Humanoid") then
                 local backpack = LocalPlayer:FindFirstChild("Backpack")
@@ -380,7 +385,7 @@ return function(Window)
                         if HvHAutoEquip then
                             char.Humanoid:EquipTool(gun)
                         end
-                    -- Работает только в том случае, если пистолет находится в руках персонажа
+                    -- Работает только если пистолет в руках
                     elseif gun.Parent == char then
                         local hvhMurderer = nil
                         for _, p in ipairs(Players:GetPlayers()) do
@@ -444,54 +449,56 @@ return function(Window)
                                 end
                             end
 
-                            -- Если простреливаемая точка найдена — производим захват и выстрел
+                            -- Если простреливаемая точка найдена — цель подтверждена, стреляем
                             if bestPointFound then
-                                -- Мгновенная жесткая доводка камеры (Bypass для ограничений Xeno)
-                                Camera.CFrame = CFrame.lookAt(cameraPos, bestPointFound)
+                                AimTarget = hvhMurderer  -- Устанавливаем цель для хуков
 
+                                -- Делаем бесшумный выстрел (без клика камерой)
                                 local currentTime = os.clock()
-                                if currentTime - lastShotTime >= SHOT_COOLDOWN then
-                                    lastShotTime = currentTime
-                                    
-                                    local screenSize = Camera.ViewportSize
-                                    local centerX = screenSize.X / 2
-                                    local centerY = screenSize.Y / 2
-                                    
-                                    -- Эмуляция клика строго по центру экрана
-                                    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-                                    task.defer(function()
-                                        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-                                    end)
+                                if currentTime - lastHvHShotTime >= hvhlShotCooldown then
+                                    lastHvHShotTime = currentTime
+                                    -- Активируем оружие; хук перехватит FireServer и направит в голову
+                                    gun:Activate()
                                 end
+                            else
+                                AimTarget = nil
                             end
+                        else
+                            AimTarget = nil
                         end
                     end
                 end
             end
+        else
+            -- Если HvH выключен, возвращаем управление обычному Silent Aim
+            -- (восстановление флагов не требуется, т.к. они управляются пользователем)
         end
 
         -- 3. Обработка задержки и автоматический выстрел (Silent Aim)
-        if AimEnabled and CurrentMurderer then
-            if CurrentMurderer ~= LastTarget then
-                LastTarget = CurrentMurderer
-                TargetTime = tick() 
-            end
+        -- Теперь этот блок сработает только если HvH выключен, либо если он включен, то AimTarget уже установлен
+        if AimEnabled and not HvHAimEnabled then  -- только для обычного режима
+            if CurrentMurderer then
+                if CurrentMurderer ~= LastTarget then
+                    LastTarget = CurrentMurderer
+                    TargetTime = tick() 
+                end
 
-            local elapsed = (tick() - TargetTime) * 1000 
-            if elapsed >= AimReactionTime then
-                AimTarget = CurrentMurderer
+                local elapsed = (tick() - TargetTime) * 1000 
+                if elapsed >= AimReactionTime then
+                    AimTarget = CurrentMurderer
 
-                if AutoShootEnabled and not HvHAimEnabled then
-                    local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
-                    if Gun and (tick() - LastShotTime > 0.4) then 
-                        LastShotTime = tick()
-                        Gun:Activate()
+                    if AutoShootEnabled then
+                        local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
+                        if Gun and (tick() - LastShotTime > 0.4) then 
+                            LastShotTime = tick()
+                            Gun:Activate()
+                        end
                     end
                 end
+            else
+                LastTarget = nil
+                AimTarget = nil
             end
-        else
-            LastTarget = nil
-            AimTarget = nil
         end
 
         -- 4. ЛОГИКА ТРИГГЕРБОТА (TRIGGER BOT)
