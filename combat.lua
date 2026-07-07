@@ -1,6 +1,6 @@
 -- =========================================================================
 -- Murder Mystery 2: Оптимизированный скрипт (Triggerbot + YARHM AI/Basic Prediction Aimbot)
--- Библиотека интерфейса: Rayfield UI
+-- Библиотека интерфейса: Rayfield UI (Фикс кейбинда)
 -- =========================================================================
 
 return function(Window)
@@ -129,7 +129,7 @@ return function(Window)
         if not LocalPlayer.Character:FindFirstChild("Gun") then
             if LocalPlayer.Backpack:FindFirstChild("Gun") then
                 LocalPlayer.Character.Humanoid:EquipTool(LocalPlayer.Backpack.Gun)
-                task.wait(0.15) -- Задержка, чтобы скрипт не выстрелил сквозь текстуру во время анимации экипировки
+                task.wait(0.15) -- Задержка для завершения анимации экипировки
             else
                 fu.notification("У вас нет пистолета!")
                 return
@@ -270,12 +270,13 @@ return function(Window)
         end
     })
 
-    -- НОВЫЙ ЭЛЕМЕНТ: Интерактивный Кейбинд для Rayfield UI
+    -- ИСПРАВЛЕННЫЙ КЕЙБИНД ПОД СТАНДАРТЫ RAYFIELD
     CombatTab:CreateKeybind({
-        Name = "Клавиша мгновенного выстрела в Мардера",
-        CurrentValue = Enum.KeyCode.R, -- Клавиша по умолчанию
+        Name = "Клавиша мгновенного выстрела",
+        CurrentKeybind = "R", -- Строковое значение (исправлено с Enum)
+        HoldToInteract = false,
         Flag = "InstantShotKeybind",
-        Callback = function(Key)
+        Callback = function()
             performInstantShot()
         end
     })
