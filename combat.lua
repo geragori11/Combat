@@ -1,5 +1,6 @@
 -- =========================================================================
 -- Murder Mystery 2: Оптимизированный скрипт (Triggerbot + YARHM AI/Basic Prediction Aimbot)
+-- Библиотека интерфейса: Rayfield UI
 -- =========================================================================
 
 return function(Window)
@@ -35,7 +36,7 @@ return function(Window)
             print("[YARHM]: " .. tostring(message))
             -- Сюда можно вставить вызов уведомлений вашей UI библиотеки, если необходимо
         end
-    end
+    }
 
     -- ==========================================
     -- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ПОИСКА РОЛЕЙ
@@ -115,6 +116,47 @@ return function(Window)
     end
 
     -- ==========================================
+    -- ФУНКЦИЯ МГНОВЕННОГО ВЫСТРЕЛА (ДЛЯ БИНДА)
+    -- ==========================================
+    local function performInstantShot()
+        local murderer = findMurderer()
+        if not murderer or not murderer.Character then
+            fu.notification("Мардер не найден или еще не взял нож!")
+            return
+        end
+
+        -- Автоматически достаем пистолет, если он в рюкзаке
+        if not LocalPlayer.Character:FindFirstChild("Gun") then
+            if LocalPlayer.Backpack:FindFirstChild("Gun") then
+                LocalPlayer.Character.Humanoid:EquipTool(LocalPlayer.Backpack.Gun)
+                task.wait(0.15) -- Задержка, чтобы скрипт не выстрелил сквозь текстуру во время анимации экипировки
+            else
+                fu.notification("У вас нет пистолета!")
+                return
+            end
+        end
+
+        -- Финальная проверка наличия пистолета в руках
+        if not LocalPlayer.Character:FindFirstChild("Gun") then
+            fu.notification("Ошибка экипировки пистолета!")
+            return
+        end
+
+        -- Расчет позиции с упреждением и отправка запроса на сервер
+        fu.notification("Выстрел по кнопке/бинду!")
+        local predictedPosition = getPredictedPosition(murderer, shootOffset)
+        local args = {
+            [1] = 1,
+            [2] = predictedPosition,
+            [3] = "AH2"
+        }
+        
+        pcall(function()
+            LocalPlayer.Character.Gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(unpack(args))
+        end)
+    end
+
+    -- ==========================================
     -- ПОТОК АВТО-ВЫСТРЕЛА YARHM (AUTO-SHOOT)
     -- ==========================================
     task.spawn(function()
@@ -169,7 +211,7 @@ return function(Window)
     end)
 
     -- ==========================================
-    -- UI ЭЛЕМЕНТЫ В COMBAT TAB
+    -- UI ЭЛЕМЕНТЫ В COMBAT TAB (RAYFIELD)
     -- ==========================================
     CombatTab:CreateSection("Hitbox Assistant")
     
@@ -228,6 +270,16 @@ return function(Window)
         end
     })
 
+    -- НОВЫЙ ЭЛЕМЕНТ: Интерактивный Кейбинд для Rayfield UI
+    CombatTab:CreateKeybind({
+        Name = "Клавиша мгновенного выстрела в Мардера",
+        CurrentValue = Enum.KeyCode.R, -- Клавиша по умолчанию
+        Flag = "InstantShotKeybind",
+        Callback = function(Key)
+            performInstantShot()
+        end
+    })
+
     CombatTab:CreateSection("Trigger Bot")
 
     CombatTab:CreateToggle({
@@ -262,7 +314,7 @@ return function(Window)
                             head.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
                             head.Transparency = 0.6 
                             head.CanCollide = false 
-                            head.Massless = true      
+                            head.Massless = true           
                         else
                             if OriginalSizes[Player] then
                                 head.Size = OriginalSizes[Player].Size
