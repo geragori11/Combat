@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Murder Mystery 2: Универсальный Rage Multipoint Aimbot + UI Wrapper
--- Модификация: Создание ОГРОМНОГО локального хитбокса прямо НА Мардере
--- Логика: Авто-позиционирование фантомного парта на цели для легитного вида выстрела
+-- Исправление: Тотальный перехват Mouse (X, Y, Hit) + Глобальный подмен сети
+-- Логика: Раздувание огромного хитбокса прямо на позиции Мардера
 -- =========================================================================
 
 local OFFSETS_HEAD = {}
@@ -60,9 +60,9 @@ return function(Window)
     local hvhlShotCooldown = 0.3   
     local lastHvHShotTime = 0
 
-    -- Создаем постоянный локальный фантомный хитбокс (который будет раздуваться на Мардере)
+    -- Создаем локальный фантомный хитбокс
     local PhantomHitbox = Instance.new("Part")
-    PhantomHitbox.Transparency = 0.7 -- Поставь 1, чтобы полностью скрыть огромный красный куб
+    PhantomHitbox.Transparency = 0.7 -- Поставь 1, чтобы сделать куб полностью невидимым
     PhantomHitbox.Color = Color3.fromRGB(255, 0, 0)
     PhantomHitbox.CanCollide = false
     PhantomHitbox.Anchored = true
@@ -75,7 +75,7 @@ return function(Window)
     wallCheckParams.IgnoreWater = true
 
     -- ==========================================
-    -- ФУНКЦИЯ ПРОВЕРКИ СТЕН (WALL CHECK ДЛЯ SILENT AIM)
+    -- ФУНКЦИЯ ПРОВЕРКИ СТЕН (WALL CHECK)
     -- ==========================================
     local function IsVisible(TargetPlayer)
         local Character = LocalPlayer.Character
@@ -95,14 +95,7 @@ return function(Window)
         return RayResult == nil
     end
 
-    -- ==========================================
-    -- ХУКИ И ПЕРЕХВАТ ДАННЫХ (МЕТАТАБЛИЦЫ ДЛЯ НАПРАВЛЕНИЯ В ХИТБОКС)
-    -- ==========================================
-    local Hooked = false
-    local hasHook = typeof(hookmetamethod) == "function"
-    local hasCheck = typeof(checkcaller) == "function"
-    local hasNamecallGetter = typeof(getnamecallmethod) == "function"
-
+    -- Диспетчер получения текущей цели
     local function GetAimTargetPart()
         if HvHAimEnabled and PhantomHitbox.Parent ~= nil then
             return PhantomHitbox
@@ -112,18 +105,34 @@ return function(Window)
         return nil
     end
 
+    -- ==========================================
+    -- ОПТИМИЗИРОВАННЫЕ ХУКИ МЕТАТАБЛИЦ (БЛОКИРОВКА МЫШИ)
+    -- ==========================================
+    local Hooked = false
+    local hasHook = typeof(hookmetamethod) == "function"
+    local hasCheck = typeof(checkcaller) == "function"
+    local hasNamecallGetter = typeof(getnamecallmethod) == "function"
+
     if hasHook and hasCheck and hasNamecallGetter then
         pcall(function()
             local oldIndex
             oldIndex = hookmetamethod(game, "__index", function(self, key)
-                if (AimEnabled or HvHAimEnabled) and not checkcaller() then
-                    local TargetPart = GetAimTargetPart()
-                    if TargetPart then
-                        local isMouse = false
-                        pcall(function() isMouse = self:IsA("Mouse") end)
-                        if isMouse then
-                            if key == "Hit" then return TargetPart.CFrame
-                            elseif key == "Target" then return TargetPart end
+                if not checkcaller() and (AimEnabled or HvHAimEnabled) then
+                    if typeof(self) == "Instance" and self.ClassName == "Mouse" then
+                        local TargetPart = GetAimTargetPart()
+                        if TargetPart then
+                            if key == "Hit" then 
+                                return TargetPart.CFrame
+                            elseif key == "Target" then 
+                                return TargetPart 
+                            elseif key == "X" or key == "Y" then
+                                -- Транслируем 3D позицию огромного хитбокса в 2D координаты экрана для обхода UIS
+                                local screenPos, onScreen = Camera:WorldToViewportPoint(TargetPart.Position)
+                                if onScreen then
+                                    if key == "X" then return screenPos.X end
+                                    if key == "Y" then return screenPos.Y end
+                                end
+                            end
                         end
                     end
                 end
@@ -135,28 +144,27 @@ return function(Window)
                 local method = getnamecallmethod()
                 local args = {...}
                 
-                if (AimEnabled or HvHAimEnabled) and not checkcaller() then
+                if not checkcaller() and (AimEnabled or HvHAimEnabled) then
                     local TargetPart = GetAimTargetPart()
                     if TargetPart then
+                        -- Подмена лучей камеры (если скрипт использует ViewportPointToRay)
+                        if typeof(self) == "Instance" and self.ClassName == "Camera" then
+                            if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
+                                local OriginPos = Camera.CFrame.Position
+                                local Direction = (TargetPart.Position - OriginPos).Unit * 1000
+                                return Ray.new(OriginPos, Direction)
+                            end
+                        end
+
+                        -- Жесткий перехват сетевого события выстрела при удержании пистолета
                         if method == "FireServer" or method == "InvokeServer" then
-                            if self.Name == "Shoot" or self.Name == "ShootGun" or (self.Parent and self.Parent:IsA("Tool")) then
+                            local char = LocalPlayer.Character
+                            if char and char:FindFirstChild("Gun") then
                                 for i, arg in ipairs(args) do
                                     if typeof(arg) == "Vector3" then
                                         args[i] = TargetPart.Position
                                     end
                                 end
-                                return oldNamecall(self, unpack(args))
-                            end
-                        end
-
-                        if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
-                            local OriginPos = Camera.CFrame.Position
-                            local Direction = (TargetPart.Position - OriginPos).Unit * 1000
-                            return Ray.new(OriginPos, Direction)
-                        elseif method == "Raycast" and self == workspace then
-                            local origin = args[1]
-                            if typeof(origin) == "Vector3" then
-                                args[2] = (TargetPart.Position - origin).Unit * 1000
                                 return oldNamecall(self, unpack(args))
                             end
                         end
@@ -168,6 +176,7 @@ return function(Window)
         end)
     end
 
+    -- Резервный хук для старых сред выполнения
     if not Hooked and typeof(getrawmetatable) == "function" and typeof(setreadonly) == "function" and typeof(newcclosure) == "function" and hasCheck and hasNamecallGetter then
         pcall(function()
             local mt = getrawmetatable(game)
@@ -177,14 +186,19 @@ return function(Window)
             setreadonly(mt, false)
             
             mt.__index = newcclosure(function(self, key)
-                if (AimEnabled or HvHAimEnabled) and not checkcaller() then
-                    local TargetPart = GetAimTargetPart()
-                    if TargetPart then
-                        local isMouse = false
-                        pcall(function() isMouse = self:IsA("Mouse") end)
-                        if isMouse then
+                if not checkcaller() and (AimEnabled or HvHAimEnabled) then
+                    if typeof(self) == "Instance" and self.ClassName == "Mouse" then
+                        local TargetPart = GetAimTargetPart()
+                        if TargetPart then
                             if key == "Hit" then return TargetPart.CFrame
-                            elseif key == "Target" then return TargetPart end
+                            elseif key == "Target" then return TargetPart
+                            elseif key == "X" or key == "Y" then
+                                local screenPos, onScreen = Camera:WorldToViewportPoint(TargetPart.Position)
+                                if onScreen then
+                                    if key == "X" then return screenPos.X end
+                                    if key == "Y" then return screenPos.Y end
+                                end
+                            end
                         end
                     end
                 end
@@ -194,11 +208,19 @@ return function(Window)
             mt.__namecall = newcclosure(function(self, ...)
                 local method = getnamecallmethod()
                 local args = {...}
-                if (AimEnabled or HvHAimEnabled) and not checkcaller() then
+                if not checkcaller() and (AimEnabled or HvHAimEnabled) then
                     local TargetPart = GetAimTargetPart()
                     if TargetPart then
+                        if typeof(self) == "Instance" and self.ClassName == "Camera" then
+                            if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
+                                local OriginPos = Camera.CFrame.Position
+                                local Direction = (TargetPart.Position - OriginPos).Unit * 1000
+                                return Ray.new(OriginPos, Direction)
+                            end
+                        end
                         if method == "FireServer" or method == "InvokeServer" then
-                            if self.Name == "Shoot" or (self.Parent and self.Parent:IsA("Tool")) then
+                            local char = LocalPlayer.Character
+                            if char and char:FindFirstChild("Gun") then
                                 for i, arg in ipairs(args) do
                                     if typeof(arg) == "Vector3" then
                                         args[i] = TargetPart.Position
@@ -206,11 +228,6 @@ return function(Window)
                                 end
                                 return oldNamecall(self, unpack(args))
                             end
-                        end
-                        if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
-                            local OriginPos = Camera.CFrame.Position
-                            local Direction = (TargetPart.Position - OriginPos).Unit * 1000
-                            return Ray.new(OriginPos, Direction)
                         end
                     end
                 end
@@ -249,10 +266,10 @@ return function(Window)
     
     CombatTab:CreateSlider({
         Name = "Размер хитбокса (Головы/Фантома)",
-        Range = {2, 40},
+        Range = {2, 50},
         Increment = 1,
         Suffix = " studs",
-        CurrentValue = 15,
+        CurrentValue = 20,
         Flag = "HitboxSizeSlider",
         Callback = function(Value)
             HitboxSize = Value
@@ -332,7 +349,7 @@ return function(Window)
     RunService.RenderStepped:Connect(function()
         local CurrentMurderer = nil
 
-        -- 1. Сбор информации о Маньяке и стандартных Хитбоксах
+        -- 1. Сканирование игроков и классических хитбоксов
         for _, Player in ipairs(Players:GetPlayers()) do
             if Player ~= LocalPlayer and Player.Character then
                 local isMurderer = (Player.Character:FindFirstChild("Knife") or 
@@ -353,7 +370,7 @@ return function(Window)
                                 OriginalSizes[Player] = {
                                     Size = head.Size,
                                     Transparency = head.Transparency,
-                                    CanCollide = data.CanCollide
+                                    CanCollide = head.CanCollide
                                 }
                             end
                             head.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
@@ -373,7 +390,7 @@ return function(Window)
             end
         end
 
-        -- 2. Логика HvH: Раздувание ОГРОМНОГО хитбокса ПРЯМО НА МАРДЕРЕ
+        -- 2. Логика HvH: Центрирование ОГРОМНОГО локального хитбокса на Мардере
         if HvHAimEnabled and CurrentMurderer then
             AimEnabled = true
             AimReactionTime = 0
@@ -424,9 +441,8 @@ return function(Window)
                         end
 
                         if bestPointFound then
-                            -- Изменяем размер фантомного парта до ОГРОМНОГО (берется из слайдера)
+                            -- Фиксируем огромные размеры фантома прямо на позиции цели
                             PhantomHitbox.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
-                            -- Переносим его прямо в точку на Мардере
                             PhantomHitbox.Position = bestPointFound
                             PhantomHitbox.Parent = workspace
                             
@@ -434,7 +450,7 @@ return function(Window)
                             if currentTime - lastHvHShotTime >= hvhlShotCooldown then
                                 lastHvHShotTime = currentTime
                                 
-                                -- Наш хук подменит траекторию прямо в этот огромный куб на Мардере
+                                -- Вызов выстрела. Хуки полностью подменяют направление в этот куб
                                 gun:Activate()
                             end
                         else
@@ -447,7 +463,7 @@ return function(Window)
             PhantomHitbox.Parent = nil
         end
 
-        -- 3. Обработка обычного Silent Aim (Если HvH выключен)
+        -- 3. Обычный Silent Aim (Если HvH выключен)
         if AimEnabled and not HvHAimEnabled then  
             if CurrentMurderer then
                 if CurrentMurderer ~= LastTarget then
