@@ -1,6 +1,6 @@
 -- =========================================================================
 -- Murder Mystery 2: Оптимизированный скрипт (Triggerbot + YARHM AI/Basic Prediction Aimbot)
--- Библиотека интерфейса: Rayfield UI (Фикс кейбинда)
+-- Библиотека интерфейса: Rayfield UI (Универсальный фикс кейбинда)
 -- =========================================================================
 
 return function(Window)
@@ -270,10 +270,12 @@ return function(Window)
         end
     })
 
-    -- ИСПРАВЛЕННЫЙ КЕЙБИНД ПОД СТАНДАРТЫ RAYFIELD
+    -- УНИВЕРСАЛЬНЫЙ КЕЙБИНД (Поддерживает любые версии Rayfield)
     CombatTab:CreateKeybind({
         Name = "Клавиша мгновенного выстрела",
-        CurrentKeybind = "R", -- Строковое значение (исправлено с Enum)
+        CurrentKeybind = Enum.KeyCode.R, -- Для оригинального Rayfield
+        Default = Enum.KeyCode.R,        -- Для альтернативных форков
+        Keybind = Enum.KeyCode.R,        -- Запасной вариант
         HoldToInteract = false,
         Flag = "InstantShotKeybind",
         Callback = function()
