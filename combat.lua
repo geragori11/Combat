@@ -1,12 +1,13 @@
--- =========================================================================
--- Murder Mystery 2: Оптимизированный скрипт (Triggerbot + YARHM AI/Basic Prediction Aimbot)
--- Интерфейс: Rayfield UI + Обход багнутого кейбинда через CreateInput
+=-- =========================================================================
+-- Murder Mystery 2: Оптимизированный скрипт (ОБНОВЛЕН ПОД REPLICATEDSTORAGE)
+-- Библиотека интерфейса: Rayfield UI
 -- =========================================================================
 
 return function(Window)
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
     local UserInputService = game:GetService("UserInputService")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
     local LocalPlayer = Players.LocalPlayer
     local Mouse = LocalPlayer:GetMouse()
     local Camera = workspace.CurrentCamera
@@ -26,18 +27,13 @@ return function(Window)
     local autoShooting = false
     local shootOffset = 5
     local offsetToPingMult = 1
-    local predictionAIEngine = false -- Выставлено в false, так как внешняя нейросеть YARHM отсутствует
+    local predictionAIEngine = false
     local predictionOngoing = false
     local predictionCooldown = false
 
-    -- Настройка кастомного бинда (Обход сломанного CreateKeybind в вашей версии Rayfield)
-    local ChosenKey = "R"
-
-    -- Простой кастомный нотификатор (заглушка для fu.notification)
     local fu = {
         notification = function(message)
             print("[YARHM]: " .. tostring(message))
-            -- Сюда можно вставить вызов уведомлений вашей UI библиотеки, если необходимо
         end
     }
 
@@ -63,15 +59,14 @@ return function(Window)
     end
 
     -- ==========================================
-    -- АЛГОРИТМ УПРЕЖДЕНИЯ (PREDICTION) ИЗ YARHM
+    -- АЛГОРИТМ УПРЕЖДЕНИЯ (PREDICTION)
     -- ==========================================
     local function getPredictedPosition(player, shootOffset)
         local usingBasicPred = not predictionAIEngine
         if predictionOngoing then
-            fu.notification("Cancelling AI prediction, using basic prediction.")
             usingBasicPred = true
         end
-        local ogplayer = player
+        
         pcall(function()
             if player.Character then
                 player = player.Character
@@ -85,27 +80,6 @@ return function(Window)
         end
     
         local playerPosition = playerHRP.Position
-    
-        if predictionAIEngine and not usingBasicPred and not predictionCooldown and getgenv().YARHMNetwork_predictPos then
-            local myRoot = LocalPlayer.Character and (LocalPlayer.Character:FindFirstChild("UpperTorso") or LocalPlayer.Character:FindFirstChild("HumanoidRootPart"))
-            if myRoot and (playerPosition - myRoot.Position).Magnitude > 20 then
-                fu.notification("Calculating trajectory...")
-                predictionCooldown = true
-                predictionOngoing = true
-                local predictedPosition = getgenv().YARHMNetwork_predictPos(ogplayer)
-                predictionOngoing = false
-                task.spawn(function()
-                    task.wait(5)
-                    predictionCooldown = false
-                end)
-                return predictedPosition
-            else
-                fu.notification("Murderer is too close for trajectory prediction. Reverting to basic prediction.")
-            end
-        elseif predictionAIEngine and not getgenv().YARHMNetwork_predictPos then
-            fu.notification("YARHM AI Engine is not available. Reverting to basic prediction.")    
-        end
-    
         local velocity = playerHRP.AssemblyLinearVelocity or Vector3.new()
         local playerMoveDirection = playerHum.MoveDirection
         
@@ -119,7 +93,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- ФУНКЦИЯ МГНОВЕННОГО ВЫСТРЕЛА
+    -- ФУНКЦИЯ МГНОВЕННОГО ВЫСТРЕЛА (ДЛЯ БИНДА)
     -- ==========================================
     local function performInstantShot()
         local murderer = findMurderer()
@@ -128,48 +102,36 @@ return function(Window)
             return
         end
 
-        -- Автоматически достаем пистолет, если он в рюкзаке
         if not LocalPlayer.Character:FindFirstChild("Gun") then
             if LocalPlayer.Backpack:FindFirstChild("Gun") then
                 LocalPlayer.Character.Humanoid:EquipTool(LocalPlayer.Backpack.Gun)
-                task.wait(0.15) -- Задержка для завершения анимации экипировки
+                task.wait(0.15)
             else
                 fu.notification("У вас нет пистолета!")
                 return
             end
         end
 
-        -- Финальная проверка наличия пистолета в руках
         if not LocalPlayer.Character:FindFirstChild("Gun") then
             fu.notification("Ошибка экипировки пистолета!")
             return
         end
 
-        -- Расчет позиции с упреждением и отправка запроса на сервер
         fu.notification("Выстрел по кнопке/бинду!")
         local predictedPosition = getPredictedPosition(murderer, shootOffset)
+        
+        -- Сборка аргументов для нового RemoteEvent
         local args = {
             [1] = 1,
             [2] = predictedPosition,
             [3] = "AH2"
         }
         
+        -- ОТПРАВКА НА НОВЫЙ ХУК ИЗ ReplicatedStorage
         pcall(function()
-            LocalPlayer.Character.Gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(unpack(args))
+            ReplicatedStorage.WeaponEvents.GunBeam:FireServer(unpack(args))
         end)
     end
-
-    -- ==========================================
-    -- НАДЕЖНОЕ ОТСЛЕЖИВАНИЕ НАЖАТИЯ КЛАВИШИ БИНДА
-    -- ==========================================
-    UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if gameProcessed then return end -- Игнорируем нажатия, если открыт чат или другое окно Roblox
-        if input.UserInputType == Enum.UserInputType.Keyboard then
-            if input.KeyCode.Name == ChosenKey then
-                performInstantShot()
-            end
-        end
-    end)
 
     -- ==========================================
     -- ПОТОК АВТО-ВЫСТРЕЛА YARHM (AUTO-SHOOT)
@@ -203,7 +165,6 @@ return function(Window)
                                     LocalPlayer.Character.Humanoid:EquipTool(LocalPlayer.Backpack.Gun)
                                     task.wait(0.1)
                                 else
-                                    fu.notification("You don't have the gun..?")
                                     continue
                                 end
                             end
@@ -215,8 +176,9 @@ return function(Window)
                                 [3] = "AH2"
                             }
                             
+                            -- ОТПРАВКА НА НОВЫЙ ХУК ИЗ ReplicatedStorage
                             pcall(function()
-                                LocalPlayer.Character.Gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(unpack(args))
+                                ReplicatedStorage.WeaponEvents.GunBeam:FireServer(unpack(args))
                             end)
                         end
                     end
@@ -285,19 +247,15 @@ return function(Window)
         end
     })
 
-    -- 100% БЕЗОПАСНАЯ И НАСТРАИВАЕМАЯ КЛАВИША ВЫСТРЕЛА ЧЕРЕЗ СТРОКОВЫЙ ВВОД (INPUT)
-    CombatTab:CreateInput({
+    CombatTab:CreateKeybind({
         Name = "Клавиша мгновенного выстрела",
-        CurrentValue = "R",
-        PlaceholderText = "Введите клавишу (например: R, F, X, E)",
-        RemoveTextAfterFocusLost = false,
-        Flag = "InstantShotKeyInput",
-        Callback = function(Text)
-            local formatted = tostring(Text):upper():gsub("%s+", "") -- Убираем пробелы и переводим в капс
-            if formatted ~= "" then
-                ChosenKey = formatted
-                fu.notification("Клавиша выстрела изменена на: " .. ChosenKey)
-            end
+        CurrentKeybind = "R",
+        Default = "R",        
+        Keybind = "R",        
+        HoldToInteract = false,
+        Flag = "InstantShotKeybind",
+        Callback = function()
+            performInstantShot()
         end
     })
 
@@ -313,10 +271,9 @@ return function(Window)
     })
 
     -- ==========================================
-    -- РАБОЧИЙ ЦИКЛ (ОСТАВШИЙСЯ ФУНКЦИОНАЛ)
+    -- РАБОЧИЙ ЦИКЛ ХИТБОКСОВ И ТРИГГЕРБОТА
     -- ==========================================
     RunService.RenderStepped:Connect(function()
-        -- 1. Логика хитбоксов Мардера
         if HitboxEnabled then
             for _, Player in ipairs(Players:GetPlayers()) do
                 if Player ~= LocalPlayer and Player.Character then
@@ -349,7 +306,6 @@ return function(Window)
             end
         end
 
-        -- 2. Логика Триггербота
         if TriggerBotEnabled then
             local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
             if Gun and (tick() - LastTriggerShotTime > 0.4) then 
