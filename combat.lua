@@ -2,6 +2,7 @@
 -- Murder Mystery 2: Универсальный Rage Multipoint Aimbot + UI Wrapper
 -- Адаптация под ограничения Xeno Executor (Bypass через Camera-Lock)
 -- Логика: Предгенерация 317 точек -> Многоточечный Raycast-Шторм -> Клик
+-- Модификация: Мгновенное смещение хитбокса (0.2 студа) перед выстрелом
 -- =========================================================================
 
 local OFFSETS_HEAD = {}
@@ -58,7 +59,7 @@ return function(Window)
     -- --- ПЕРЕМЕННЫЕ HVH SNAP AIMBOT (XENO) ---
     local HvHAimEnabled = false
     local HvHAutoEquip = false
-    local hvhlShotCooldown = 0.1   -- минимальный интервал для авто-выстрела
+    local hvhlShotCooldown = 0.4   -- Сбалансированный кулдаун для корректного возврата хитбокса
     local lastHvHShotTime = 0
 
     local wallCheckParams = RaycastParams.new()
@@ -92,7 +93,7 @@ return function(Window)
     CombatTab:CreateSection("Hitbox Assistant")
     
     CombatTab:CreateToggle({
-        Name = "Увеличить хитбокс Мардера",
+        Name = "Увеличить хитбокс - Мардер",
         CurrentValue = false,
         Flag = "MurdererHitboxToggle",
         Callback = function(Value)
@@ -200,7 +201,7 @@ return function(Window)
     })
 
     -- ==========================================
-    -- ХУКИ И ПЕРЕХВАТ ДАННЫХ (МЕТАТАБЛИЦЫ ДЛЯ SILENT AIM)
+    -- ХУКИ И П ПЕРЕХВАТ ДАННЫХ (МЕТАТАБЛИЦЫ ДЛЯ SILENT AIM)
     -- ==========================================
     local Hooked = false
     local hasHook = typeof(hookmetamethod) == "function"
@@ -367,25 +368,22 @@ return function(Window)
             end
         end
 
-        -- 2. Логика Интегрированного Rage Multipoint Aimbot (HvH) - СИЛЕНТ ВЕРСИЯ
+        -- 2. Логика Интегрированного Rage Multipoint Aimbot (HvH) с СМЕЩЕНИЕМ ХИТБОКСА
         if HvHAimEnabled then
-            -- Принудительно включаем Silent Aim и убираем задержку
             AimEnabled = true
             AimReactionTime = 0
-            AutoShootEnabled = false  -- выстрел будем производить самостоятельно
+            AutoShootEnabled = false 
 
             local char = LocalPlayer.Character
-            if char and char:FindFirstChild("Humanoid") then
+            local myRoot = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head"))
+            
+            if char and char:FindFirstChild("Humanoid") and myRoot then
                 local backpack = LocalPlayer:FindFirstChild("Backpack")
                 local gun = char:FindFirstChild("Gun") or (backpack and backpack:FindFirstChild("Gun"))
 
                 if gun then
-                    -- Авто-экипировка пистолета
-                    if gun.Parent == backpack then
-                        if HvHAutoEquip then
-                            char.Humanoid:EquipTool(gun)
-                        end
-                    -- Работает только если пистолет в руках
+                    if gun.Parent == backpack and HvHAutoEquip then
+                        char.Humanoid:EquipTool(gun)
                     elseif gun.Parent == char then
                         local hvhMurderer = nil
                         for _, p in ipairs(Players:GetPlayers()) do
@@ -400,12 +398,10 @@ return function(Window)
                         if hvhMurderer and hvhMurderer.Character then
                             local mChar = hvhMurderer.Character
                             
-                            -- Исключаем из коллизий лучей себя и элементы одежды цели
                             if LocalPlayer.Character then
                                 wallCheckParams.FilterDescendantsInstances = {LocalPlayer.Character, mChar:GetChildren()}
                             end
 
-                            -- Хитбоксы по приоритету Rage (Голова -> Тело -> Ноги)
                             local hitboxes = {
                                 {part = mChar:FindFirstChild("Head"), offsets = OFFSETS_HEAD, priority = 3},
                                 {part = mChar:FindFirstChild("Torso") or mChar:FindFirstChild("UpperTorso"), offsets = OFFSETS_TORSO, priority = 2},
@@ -416,8 +412,9 @@ return function(Window)
                             local cameraPos = Camera.CFrame.Position
                             local bestPointFound = nil
                             local maxPriority = 0
+                            local targetPartInstance = nil
 
-                            -- Многоточечный сканирующий шторм (317 точек)
+                            -- Многоточечный сканирующий шторм
                             for i = 1, #hitboxes do
                                 local data = hitboxes[i]
                                 local part = data.part
@@ -425,7 +422,6 @@ return function(Window)
                                 if part and part:IsA("BasePart") and data.priority > maxPriority then
                                     local partCFrame = part.CFrame
                                     local partSize = part.Size
-                                    
                                     local cpos = partCFrame.Position
                                     local right = partCFrame.RightVector
                                     local up = partCFrame.UpVector
@@ -439,26 +435,42 @@ return function(Window)
                                         
                                         local result = workspace:Raycast(cameraPos, direction, wallCheckParams)
                                         
-                                        -- Если до конкретной фантомной точки нет преград — фиксируем ее
                                         if not result then
                                             bestPointFound = worldPoint
                                             maxPriority = data.priority
-                                            break -- Нашли лучшую видимую точку на данном хитбоксе
+                                            targetPartInstance = part
+                                            break 
                                         end
                                     end
                                 end
                             end
 
-                            -- Если простреливаемая точка найдена — цель подтверждена, стреляем
-                            if bestPointFound then
-                                AimTarget = hvhMurderer  -- Устанавливаем цель для хуков
+                            -- Если простреливаемая точка найдена и кулдаун прошёл
+                            if bestPointFound and targetPartInstance then
+                                AimTarget = hvhMurderer  
 
-                                -- Делаем бесшумный выстрел (без клика камерой)
                                 local currentTime = os.clock()
                                 if currentTime - lastHvHShotTime >= hvhlShotCooldown then
                                     lastHvHShotTime = currentTime
-                                    -- Активируем оружие; хук перехватит FireServer и направит в голову
+                                    
+                                    -- Рассчитываем позицию ТЕПОРТАЦИИ хитбокса (0.2 студа от нас в сторону Мардера)
+                                    local myPos = myRoot.Position
+                                    local directionToMurderer = (bestPointFound - myPos).Unit
+                                    local teleportPosition = myPos + (directionToMurderer * 0.2)
+                                    
+                                    -- Сохраняем оригинальный CFrame хитбокса, чтобы не сломать игру
+                                    local oldCFrame = targetPartInstance.CFrame
+                                    
+                                    -- Делаем "Трюк с хитбоксом": Переносим деталь вплотную к стволу на один кадр
+                                    targetPartInstance.CFrame = CFrame.new(teleportPosition)
+                                    
+                                    -- Сразу же стреляем (Регистрация попадания будет 100% локально)
                                     gun:Activate()
+                                    
+                                    -- Возвращаем хитбокс обратно на место Мардера в этот же фрейм
+                                    -- Визуально пуля вылетит прямо в лицо хитбоксу, регистрируя урон
+                                    RunService.Heartbeat:Wait()
+                                    targetPartInstance.CFrame = oldCFrame
                                 end
                             else
                                 AimTarget = nil
@@ -469,14 +481,10 @@ return function(Window)
                     end
                 end
             end
-        else
-            -- Если HvH выключен, возвращаем управление обычному Silent Aim
-            -- (восстановление флагов не требуется, т.к. они управляются пользователем)
         end
 
-        -- 3. Обработка задержки и автоматический выстрел (Silent Aim)
-        -- Теперь этот блок сработает только если HvH выключен, либо если он включен, то AimTarget уже установлен
-        if AimEnabled and not HvHAimEnabled then  -- только для обычного режима
+        -- 3. Обработка задержки и автоматический выстрел (Обычный Silent Aim)
+        if AimEnabled and not HvHAimEnabled then  
             if CurrentMurderer then
                 if CurrentMurderer ~= LastTarget then
                     LastTarget = CurrentMurderer
