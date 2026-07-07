@@ -1,6 +1,6 @@
 -- =========================================================================
 -- Murder Mystery 2: Оптимизированный скрипт (Triggerbot + YARHM AI/Basic Prediction Aimbot)
--- Библиотека интерфейса: Rayfield UI (Финальный фикс строк для кейбинда)
+-- Интерфейс: Rayfield UI + Обход багнутого кейбинда через CreateInput
 -- =========================================================================
 
 return function(Window)
@@ -29,6 +29,9 @@ return function(Window)
     local predictionAIEngine = false -- Выставлено в false, так как внешняя нейросеть YARHM отсутствует
     local predictionOngoing = false
     local predictionCooldown = false
+
+    -- Настройка кастомного бинда (Обход сломанного CreateKeybind в вашей версии Rayfield)
+    local ChosenKey = "R"
 
     -- Простой кастомный нотификатор (заглушка для fu.notification)
     local fu = {
@@ -116,7 +119,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- ФУНКЦИЯ МГНОВЕННОГО ВЫСТРЕЛА (ДЛЯ БИНДА)
+    -- ФУНКЦИЯ МГНОВЕННОГО ВЫСТРЕЛА
     -- ==========================================
     local function performInstantShot()
         local murderer = findMurderer()
@@ -155,6 +158,18 @@ return function(Window)
             LocalPlayer.Character.Gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(unpack(args))
         end)
     end
+
+    -- ==========================================
+    -- НАДЕЖНОЕ ОТСЛЕЖИВАНИЕ НАЖАТИЯ КЛАВИШИ БИНДА
+    -- ==========================================
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end -- Игнорируем нажатия, если открыт чат или другое окно Roblox
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            if input.KeyCode.Name == ChosenKey then
+                performInstantShot()
+            end
+        end
+    end)
 
     -- ==========================================
     -- ПОТОК АВТО-ВЫСТРЕЛА YARHM (AUTO-SHOOT)
@@ -270,16 +285,19 @@ return function(Window)
         end
     })
 
-    -- АБСОЛЮТНО БЕЗОПАСНЫЙ СТРОКОВЫЙ КЕЙБИНД ДЛЯ ЛЮБЫХ МОДИФИКАЦИЙ RAYFIELD
-    CombatTab:CreateKeybind({
+    -- 100% БЕЗОПАСНАЯ И НАСТРАИВАЕМАЯ КЛАВИША ВЫСТРЕЛА ЧЕРЕЗ СТРОКОВЫЙ ВВОД (INPUT)
+    CombatTab:CreateInput({
         Name = "Клавиша мгновенного выстрела",
-        CurrentKeybind = "R", -- Строка для стандартного Rayfield
-        Default = "R",        -- Строка для кастомных форков UI
-        Keybind = "R",        -- Запасной вариант строкового аргумента
-        HoldToInteract = false,
-        Flag = "InstantShotKeybind",
-        Callback = function()
-            performInstantShot()
+        CurrentValue = "R",
+        PlaceholderText = "Введите клавишу (например: R, F, X, E)",
+        RemoveTextAfterFocusLost = false,
+        Flag = "InstantShotKeyInput",
+        Callback = function(Text)
+            local formatted = tostring(Text):upper():gsub("%s+", "") -- Убираем пробелы и переводим в капс
+            if formatted ~= "" then
+                ChosenKey = formatted
+                fu.notification("Клавиша выстрела изменена на: " .. ChosenKey)
+            end
         end
     })
 
