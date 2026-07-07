@@ -1,8 +1,7 @@
 -- =========================================================================
 -- Murder Mystery 2: Универсальный Rage Multipoint Aimbot + UI Wrapper
--- Адаптация под ограничения Xeno Executor (Bypass через Camera-Lock)
--- Логика: Предгенерация 317 точек -> Многоточечный Raycast-Шторм -> Клик
--- Модификация: Мгновенное смещение хитбокса (0.2 студа) перед выстрелом
+-- Адаптация под ограничения Xeno Executor (Bypass через Phantom Hitbox)
+-- Логика: Генерация локальной цели в 0.2 студах для 100% локальной регистрации
 -- =========================================================================
 
 local OFFSETS_HEAD = {}
@@ -31,7 +30,6 @@ precomputeGrid(4, OFFSETS_LIMBS)  -- 64 точки на каждую конеч�
 return function(Window)
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
-    local VirtualInputManager = game:GetService("VirtualInputManager")
     local LocalPlayer = Players.LocalPlayer
     local Mouse = LocalPlayer:GetMouse()
     local Camera = workspace.CurrentCamera
@@ -59,8 +57,19 @@ return function(Window)
     -- --- ПЕРЕМЕННЫЕ HVH SNAP AIMBOT (XENO) ---
     local HvHAimEnabled = false
     local HvHAutoEquip = false
-    local hvhlShotCooldown = 0.4   -- Сбалансированный кулдаун для корректного возврата хитбокса
+    local hvhlShotCooldown = 0.3   
     local lastHvHShotTime = 0
+
+    -- Создаем постоянный локальный фантомный хитбокс
+    local PhantomHitbox = Instance.new("Part")
+    PhantomHitbox.Size = Vector3.new(2, 2, 2)
+    PhantomHitbox.Transparency = 0.7 -- Поставь 1, чтобы полностью скрыть деталь от глаз
+    PhantomHitbox.Color = Color3.fromRGB(255, 0, 0)
+    PhantomHitbox.CanCollide = false
+    PhantomHitbox.Anchored = true
+    PhantomHitbox.Material = Enum.Material.ForceField
+    PhantomHitbox.Name = "LocalPhantomHitbox"
+    PhantomHitbox.Parent = nil 
 
     local wallCheckParams = RaycastParams.new()
     wallCheckParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -80,7 +89,7 @@ return function(Window)
         
         local RayParams = RaycastParams.new()
         RayParams.FilterType = Enum.RaycastFilterType.Exclude
-        RayParams.FilterDescendantsInstances = {Character, TargetCharacter, Camera}
+        RayParams.FilterDescendantsInstances = {Character, TargetCharacter, Camera, PhantomHitbox}
         RayParams.IgnoreWater = true
         
         local RayResult = workspace:Raycast(Origin.Position, Destination.Position - Origin.Position, RayParams)
@@ -88,137 +97,32 @@ return function(Window)
     end
 
     -- ==========================================
-    -- СЕКЦИЯ: HITBOX ASSISTANT
-    -- ==========================================
-    CombatTab:CreateSection("Hitbox Assistant")
-    
-    CombatTab:CreateToggle({
-        Name = "Увеличить хитбокс - Мардер",
-        CurrentValue = false,
-        Flag = "MurdererHitboxToggle",
-        Callback = function(Value)
-            HitboxEnabled = Value
-            if not Value then
-                for player, data in pairs(OriginalSizes) do
-                    if player.Character and player.Character:FindFirstChild("Head") then
-                        local head = player.Character.Head
-                        head.Size = data.Size
-                        head.Transparency = data.Transparency
-                        head.CanCollide = data.CanCollide
-                    end
-                end
-                table.clear(OriginalSizes)
-            end
-        end
-    })
-    
-    CombatTab:CreateSlider({
-        Name = "Размер хитбокса (Головы)",
-        Range = {2, 40},
-        Increment = 1,
-        Suffix = " studs",
-        CurrentValue = 15,
-        Flag = "HitboxSizeSlider",
-        Callback = function(Value)
-            HitboxSize = Value
-        end
-    })
-
-    -- ==========================================
-    -- СЕКЦИЯ: ULTIMATE SILENT AIM
-    -- ==========================================
-    CombatTab:CreateSection("Silent Aim")
-
-    CombatTab:CreateToggle({
-        Name = "Включить Магический Аим (Silent)",
-        CurrentValue = false,
-        Flag = "AutoAimToggle",
-        Callback = function(Value)
-            AimEnabled = Value
-            if not Value then
-                AimTarget = nil
-                LastTarget = nil
-            end
-        end
-    })
-
-    CombatTab:CreateSlider({
-        Name = "Время реакции (Задержка)",
-        Range = {0, 300},
-        Increment = 10,
-        Suffix = " ms",
-        CurrentValue = 0,
-        Flag = "AimReactionSlider",
-        Callback = function(Value)
-            AimReactionTime = Value
-        end
-    })
-
-    CombatTab:CreateToggle({
-        Name = "Автовыстрел (Auto Shoot)",
-        CurrentValue = false,
-        Flag = "AutoShootToggle",
-        Callback = function(Value)
-            AutoShootEnabled = Value
-        end
-    })
-
-    -- ==========================================
-    -- СЕКЦИЯ: TRIGGER BOT
-    -- ==========================================
-    CombatTab:CreateSection("Trigger Bot")
-
-    CombatTab:CreateToggle({
-        Name = "Включить Триггербот (Auto Fire)",
-        CurrentValue = false,
-        Flag = "TriggerBotToggle",
-        Callback = function(Value)
-            TriggerBotEnabled = Value
-        end
-    })
-
-    -- ==========================================
-    -- СЕКЦИЯ: HVH SNAP AIMBOT (XENO EXECUTOR)
-    -- ==========================================
-    CombatTab:CreateSection("HvH Snap Aimbot (Xeno)")
-
-    CombatTab:CreateToggle({
-        Name = "Включить HvH Snap Аим",
-        CurrentValue = false,
-        Flag = "HvHAimToggle",
-        Callback = function(Value)
-            HvHAimEnabled = Value
-        end
-    })
-
-    CombatTab:CreateToggle({
-        Name = "Авто-экипировка пистолета",
-        CurrentValue = false,
-        Flag = "HvHAutoEquipToggle",
-        Callback = function(Value)
-            HvHAutoEquip = Value
-        end
-    })
-
-    -- ==========================================
-    -- ХУКИ И П ПЕРЕХВАТ ДАННЫХ (МЕТАТАБЛИЦЫ ДЛЯ SILENT AIM)
+    -- ХУКИ И ПЕРЕХВАТ ДАННЫХ (МЕТАТАБЛИЦЫ ДЛЯ SILENT AIM)
     -- ==========================================
     local Hooked = false
     local hasHook = typeof(hookmetamethod) == "function"
     local hasCheck = typeof(checkcaller) == "function"
     local hasNamecallGetter = typeof(getnamecallmethod) == "function"
 
+    local function GetAimTargetPart()
+        if HvHAimEnabled and PhantomHitbox.Parent ~= nil then
+            return PhantomHitbox
+        elseif AimTarget and AimTarget.Character then
+            return AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
+        end
+        return nil
+    end
+
     if hasHook and hasCheck and hasNamecallGetter then
         pcall(function()
             local oldIndex
             oldIndex = hookmetamethod(game, "__index", function(self, key)
-                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    local isMouse = false
-                    pcall(function() isMouse = self:IsA("Mouse") end)
-                    
-                    if isMouse then
-                        local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
-                        if TargetPart then
+                if (AimEnabled or HvHAimEnabled) and not checkcaller() then
+                    local TargetPart = GetAimTargetPart()
+                    if TargetPart then
+                        local isMouse = false
+                        pcall(function() isMouse = self:IsA("Mouse") end)
+                        if isMouse then
                             if key == "Hit" then return TargetPart.CFrame
                             elseif key == "Target" then return TargetPart end
                         end
@@ -232,9 +136,8 @@ return function(Window)
                 local method = getnamecallmethod()
                 local args = {...}
                 
-                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
-                    
+                if (AimEnabled or HvHAimEnabled) and not checkcaller() then
+                    local TargetPart = GetAimTargetPart()
                     if TargetPart then
                         if method == "FireServer" or method == "InvokeServer" then
                             if self.Name == "Shoot" or self.Name == "ShootGun" or (self.Parent and self.Parent:IsA("Tool")) then
@@ -275,12 +178,12 @@ return function(Window)
             setreadonly(mt, false)
             
             mt.__index = newcclosure(function(self, key)
-                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    local isMouse = false
-                    pcall(function() isMouse = self:IsA("Mouse") end)
-                    if isMouse then
-                        local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
-                        if TargetPart then
+                if (AimEnabled or HvHAimEnabled) and not checkcaller() then
+                    local TargetPart = GetAimTargetPart()
+                    if TargetPart then
+                        local isMouse = false
+                        pcall(function() isMouse = self:IsA("Mouse") end)
+                        if isMouse then
                             if key == "Hit" then return TargetPart.CFrame
                             elseif key == "Target" then return TargetPart end
                         end
@@ -292,8 +195,8 @@ return function(Window)
             mt.__namecall = newcclosure(function(self, ...)
                 local method = getnamecallmethod()
                 local args = {...}
-                if AimEnabled and AimTarget and AimTarget.Character and not checkcaller() then
-                    local TargetPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
+                if (AimEnabled or HvHAimEnabled) and not checkcaller() then
+                    local TargetPart = GetAimTargetPart()
                     if TargetPart then
                         if method == "FireServer" or method == "InvokeServer" then
                             if self.Name == "Shoot" or (self.Parent and self.Parent:IsA("Tool")) then
@@ -321,12 +224,116 @@ return function(Window)
     end
 
     -- ==========================================
+    -- СОЗДАНИЕ ЭЛЕМЕНТОВ ИНТЕРФЕЙСА (UI)
+    -- ==========================================
+    CombatTab:CreateSection("Hitbox Assistant")
+    
+    CombatTab:CreateToggle({
+        Name = "Увеличить хитбокс Мардера",
+        CurrentValue = false,
+        Flag = "MurdererHitboxToggle",
+        Callback = function(Value)
+            HitboxEnabled = Value
+            if not Value then
+                for player, data in pairs(OriginalSizes) do
+                    if player.Character and player.Character:FindFirstChild("Head") then
+                        local head = player.Character.Head
+                        head.Size = data.Size
+                        head.Transparency = data.Transparency
+                        head.CanCollide = data.CanCollide
+                    end
+                end
+                table.clear(OriginalSizes)
+            end
+        end
+    })
+    
+    CombatTab:CreateSlider({
+        Name = "Размер хитбокса (Головы)",
+        Range = {2, 40},
+        Increment = 1,
+        Suffix = " studs",
+        CurrentValue = 15,
+        Flag = "HitboxSizeSlider",
+        Callback = function(Value)
+            HitboxSize = Value
+        end
+    })
+
+    CombatTab:CreateSection("Silent Aim")
+
+    CombatTab:CreateToggle({
+        Name = "Включить Магический Аим (Silent)",
+        CurrentValue = false,
+        Flag = "AutoAimToggle",
+        Callback = function(Value)
+            AimEnabled = Value
+            if not Value then
+                AimTarget = nil
+                LastTarget = nil
+            end
+        end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Время реакции (Задержка)",
+        Range = {0, 300},
+        Increment = 10,
+        Suffix = " ms",
+        CurrentValue = 0,
+        Flag = "AimReactionSlider",
+        Callback = function(Value)
+            AimReactionTime = Value
+        end
+    })
+
+    CombatTab:CreateToggle({
+        Name = "Автовыстрел (Auto Shoot)",
+        CurrentValue = false,
+        Flag = "AutoShootToggle",
+        Callback = function(Value)
+            AutoShootEnabled = Value
+        end
+    })
+
+    CombatTab:CreateSection("Trigger Bot")
+
+    CombatTab:CreateToggle({
+        Name = "Включить Триггербот (Auto Fire)",
+        CurrentValue = false,
+        Flag = "TriggerBotToggle",
+        Callback = function(Value)
+            TriggerBotEnabled = Value
+        end
+    })
+
+    CombatTab:CreateSection("HvH Snap Aimbot (Xeno)")
+
+    CombatTab:CreateToggle({
+        Name = "Включить HvH Snap Аим",
+        CurrentValue = false,
+        Flag = "HvHAimToggle",
+        Callback = function(Value)
+            HvHAimEnabled = Value
+        end
+    })
+
+    CombatTab:CreateToggle({
+        Name = "Авто-экипировка пистолета",
+        CurrentValue = false,
+        Flag = "HvHAutoEquipToggle",
+        Callback = function(Value)
+            HvHAutoEquip = Value
+        end
+    })
+
+    -- ==========================================
     -- ЕДИНЫЙ ЦИКЛ ОБРАБОТКИ (RENDERSTEPPED)
     -- ==========================================
     RunService.RenderStepped:Connect(function()
         local CurrentMurderer = nil
 
-        -- 1. Сбор информации о Маньяке и Хитбоксах
+        -- 1. Сбор информации о Маньяке и стандартных Хитбоксах
         for _, Player in ipairs(Players:GetPlayers()) do
             if Player ~= LocalPlayer and Player.Character then
                 local isMurderer = (Player.Character:FindFirstChild("Knife") or 
@@ -339,7 +346,6 @@ return function(Window)
                     end
                 end
 
-                -- Контроль динамического изменения хитбоксов
                 if HitboxEnabled then
                     local head = Player.Character:FindFirstChild("Head")
                     if head and head:IsA("BasePart") then
@@ -368,8 +374,8 @@ return function(Window)
             end
         end
 
-        -- 2. Логика Интегрированного Rage Multipoint Aimbot (HvH) с СМЕЩЕНИЕМ ХИТБОКСА
-        if HvHAimEnabled then
+        -- 2. Логика Интегрированного HvH С ФАНТОМНЫМ ХИТБОКСОМ
+        if HvHAimEnabled and CurrentMurderer then
             AimEnabled = true
             AimReactionTime = 0
             AutoShootEnabled = false 
@@ -385,105 +391,65 @@ return function(Window)
                     if gun.Parent == backpack and HvHAutoEquip then
                         char.Humanoid:EquipTool(gun)
                     elseif gun.Parent == char then
-                        local hvhMurderer = nil
-                        for _, p in ipairs(Players:GetPlayers()) do
-                            if p ~= LocalPlayer and p.Character then
-                                if p.Character:FindFirstChild("Knife") or (p:FindFirstChild("Backpack") and p.Backpack:FindFirstChild("Knife")) then
-                                    hvhMurderer = p
-                                    break
-                                end
-                            end
-                        end
+                        
+                        local mChar = CurrentMurderer.Character
+                        wallCheckParams.FilterDescendantsInstances = {char, mChar:GetChildren(), PhantomHitbox}
 
-                        if hvhMurderer and hvhMurderer.Character then
-                            local mChar = hvhMurderer.Character
-                            
-                            if LocalPlayer.Character then
-                                wallCheckParams.FilterDescendantsInstances = {LocalPlayer.Character, mChar:GetChildren()}
-                            end
+                        local hitboxes = {
+                            {part = mChar:FindFirstChild("Head"), offsets = OFFSETS_HEAD, priority = 3},
+                            {part = mChar:FindFirstChild("Torso") or mChar:FindFirstChild("UpperTorso"), offsets = OFFSETS_TORSO, priority = 2}
+                        }
 
-                            local hitboxes = {
-                                {part = mChar:FindFirstChild("Head"), offsets = OFFSETS_HEAD, priority = 3},
-                                {part = mChar:FindFirstChild("Torso") or mChar:FindFirstChild("UpperTorso"), offsets = OFFSETS_TORSO, priority = 2},
-                                {part = mChar:FindFirstChild("Left Leg") or mChar:FindFirstChild("LeftLowerLeg"), offsets = OFFSETS_LIMBS, priority = 1},
-                                {part = mChar:FindFirstChild("Right Leg") or mChar:FindFirstChild("RightLowerLeg"), offsets = OFFSETS_LIMBS, priority = 1}
-                            }
+                        local cameraPos = Camera.CFrame.Position
+                        local bestPointFound = nil
 
-                            local cameraPos = Camera.CFrame.Position
-                            local bestPointFound = nil
-                            local maxPriority = 0
-                            local targetPartInstance = nil
-
-                            -- Многоточечный сканирующий шторм
-                            for i = 1, #hitboxes do
-                                local data = hitboxes[i]
-                                local part = data.part
+                        for i = 1, #hitboxes do
+                            local part = hitboxes[i].part
+                            if part and part:IsA("BasePart") then
+                                local partCFrame = part.CFrame
+                                local partSize = part.Size
+                                local offsets = hitboxes[i].offsets
                                 
-                                if part and part:IsA("BasePart") and data.priority > maxPriority then
-                                    local partCFrame = part.CFrame
-                                    local partSize = part.Size
-                                    local cpos = partCFrame.Position
-                                    local right = partCFrame.RightVector
-                                    local up = partCFrame.UpVector
-                                    local look = partCFrame.LookVector
-                                    local offsets = data.offsets
+                                for j = 1, #offsets do
+                                    local offset = offsets[j]
+                                    local worldPoint = partCFrame.Position + (partCFrame.RightVector * (offset.X * partSize.X)) + (partCFrame.UpVector * (offset.Y * partSize.Y)) + (partCFrame.LookVector * (offset.Z * partSize.Z))
+                                    local result = workspace:Raycast(cameraPos, worldPoint - cameraPos, wallCheckParams)
                                     
-                                    for j = 1, #offsets do
-                                        local offset = offsets[j]
-                                        local worldPoint = cpos + (right * (offset.X * partSize.X)) + (up * (offset.Y * partSize.Y)) + (look * (offset.Z * partSize.Z))
-                                        local direction = worldPoint - cameraPos
-                                        
-                                        local result = workspace:Raycast(cameraPos, direction, wallCheckParams)
-                                        
-                                        if not result then
-                                            bestPointFound = worldPoint
-                                            maxPriority = data.priority
-                                            targetPartInstance = part
-                                            break 
-                                        end
+                                    if not result then
+                                        bestPointFound = worldPoint
+                                        break
                                     end
                                 end
                             end
+                            if bestPointFound then break end
+                        end
 
-                            -- Если простреливаемая точка найдена и кулдаун прошёл
-                            if bestPointFound and targetPartInstance then
-                                AimTarget = hvhMurderer  
-
-                                local currentTime = os.clock()
-                                if currentTime - lastHvHShotTime >= hvhlShotCooldown then
-                                    lastHvHShotTime = currentTime
-                                    
-                                    -- Рассчитываем позицию ТЕПОРТАЦИИ хитбокса (0.2 студа от нас в сторону Мардера)
-                                    local myPos = myRoot.Position
-                                    local directionToMurderer = (bestPointFound - myPos).Unit
-                                    local teleportPosition = myPos + (directionToMurderer * 0.2)
-                                    
-                                    -- Сохраняем оригинальный CFrame хитбокса, чтобы не сломать игру
-                                    local oldCFrame = targetPartInstance.CFrame
-                                    
-                                    -- Делаем "Трюк с хитбоксом": Переносим деталь вплотную к стволу на один кадр
-                                    targetPartInstance.CFrame = CFrame.new(teleportPosition)
-                                    
-                                    -- Сразу же стреляем (Регистрация попадания будет 100% локально)
-                                    gun:Activate()
-                                    
-                                    -- Возвращаем хитбокс обратно на место Мардера в этот же фрейм
-                                    -- Визуально пуля вылетит прямо в лицо хитбоксу, регистрируя урон
-                                    RunService.Heartbeat:Wait()
-                                    targetPartInstance.CFrame = oldCFrame
-                                end
-                            else
-                                AimTarget = nil
+                        if bestPointFound then
+                            local myPos = myRoot.Position
+                            local directionToMurderer = (bestPointFound - myPos).Unit
+                            
+                            -- Помещаем фантомный хитбокс строго в 0.2 студах от нашего персонажа
+                            PhantomHitbox.Position = myPos + (directionToMurderer * 0.2)
+                            PhantomHitbox.Parent = workspace
+                            
+                            local currentTime = os.clock()
+                            if currentTime - lastHvHShotTime >= hvhlShotCooldown then
+                                lastHvHShotTime = currentTime
+                                
+                                -- Выстрел. Хуки направят пулю локально в PhantomHitbox
+                                gun:Activate()
                             end
                         else
-                            AimTarget = nil
+                            PhantomHitbox.Parent = nil
                         end
                     end
                 end
             end
+        else
+            PhantomHitbox.Parent = nil
         end
 
-        -- 3. Обработка задержки и автоматический выстрел (Обычный Silent Aim)
+        -- 3. Обработка обычного Silent Aim (Если HvH выключен)
         if AimEnabled and not HvHAimEnabled then  
             if CurrentMurderer then
                 if CurrentMurderer ~= LastTarget then
