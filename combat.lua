@@ -1,330 +1,274 @@
--- =========================================================================
--- Murder Mystery 2: Оптимизированный скрипт (ОБНОВЛЕН ПОД REPLICATEDSTORAGE)
--- Библиотека интерфейса: Rayfield UI
--- =========================================================================
+-- UI/core.lua
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
 
-return function(Window)
-    local Players = game:GetService("Players")
-    local RunService = game:GetService("RunService")
-    local UserInputService = game:GetService("UserInputService")
-    local ReplicatedStorage = game:GetService("ReplicatedStorage")
-    local LocalPlayer = Players.LocalPlayer
-    local Mouse = LocalPlayer:GetMouse()
-    local Camera = workspace.CurrentCamera
-    
-    local CombatTab = Window:CreateTab("COMBAT", 4483362458)
-    
-    -- --- НАСТРОЙКИ ХИТБОКСА ---
-    local HitboxEnabled = false
-    local HitboxSize = 15
-    local OriginalSizes = {} 
+local Library = {
+    CurrentTab = nil,
+    TooltipDelay = 0.6
+}
 
-    -- --- НАСТРОЙКИ TRIGGERBOT ---
-    local TriggerBotEnabled = false
-    local LastTriggerShotTime = 0
-
-    -- --- НАСТРОЙКИ YARHM AIMBOT ---
-    local autoShooting = false
-    local shootOffset = 5
-    local offsetToPingMult = 1
-    local predictionAIEngine = false
-    local predictionOngoing = false
-    local predictionCooldown = false
-
-    local fu = {
-        notification = function(message)
-            print("[YARHM]: " .. tostring(message))
-        end
-    }
-
-    -- ==========================================
-    -- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ПОИСКА РОЛЕЙ
-    -- ==========================================
-    local function findMurderer()
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player.Character and (player.Character:FindFirstChild("Knife") or (player:FindFirstChild("Backpack") and player.Backpack:FindFirstChild("Knife"))) then
-                return player
-            end
-        end
-        return nil
-    end
-
-    local function findSheriff()
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player.Character and (player.Character:FindFirstChild("Gun") or (player:FindFirstChild("Backpack") and player.Backpack:FindFirstChild("Gun"))) then
-                return player
-            end
-        end
-        return nil
-    end
-
-    -- ==========================================
-    -- АЛГОРИТМ УПРЕЖДЕНИЯ (PREDICTION)
-    -- ==========================================
-    local function getPredictedPosition(player, shootOffset)
-        local usingBasicPred = not predictionAIEngine
-        if predictionOngoing then
-            usingBasicPred = true
-        end
-        
-        pcall(function()
-            if player.Character then
-                player = player.Character
-            end
-        end)
-        
-        local playerHRP = player:FindFirstChild("UpperTorso") or player:FindFirstChild("HumanoidRootPart")
-        local playerHum = player:FindFirstChild("Humanoid")
-        if not playerHRP or not playerHum then
-            return Vector3.new(0,0,0)
-        end
-    
-        local playerPosition = playerHRP.Position
-        local velocity = playerHRP.AssemblyLinearVelocity or Vector3.new()
-        local playerMoveDirection = playerHum.MoveDirection
-        
-        local predictedPosition = playerHRP.Position + (velocity * Vector3.new(0.75, 0.5, 0.75)) * (shootOffset / 15) + playerMoveDirection * shootOffset
-        
-        local ping = 0.05
-        pcall(function() ping = LocalPlayer:GetNetworkPing() end)
-        predictedPosition = predictedPosition * (((ping * 1000) * ((offsetToPingMult - 1) * 0.01)) + 1)
-    
-        return predictedPosition
-    end
-
-    -- ==========================================
-    -- ФУНКЦИЯ МГНОВЕННОГО ВЫСТРЕЛА (ДЛЯ БИНДА)
-    -- ==========================================
-    local function performInstantShot()
-        local murderer = findMurderer()
-        if not murderer or not murderer.Character then
-            fu.notification("Мардер не найден или еще не взял нож!")
-            return
-        end
-
-        if not LocalPlayer.Character:FindFirstChild("Gun") then
-            if LocalPlayer.Backpack:FindFirstChild("Gun") then
-                LocalPlayer.Character.Humanoid:EquipTool(LocalPlayer.Backpack.Gun)
-                task.wait(0.15)
-            else
-                fu.notification("У вас нет пистолета!")
-                return
-            end
-        end
-
-        if not LocalPlayer.Character:FindFirstChild("Gun") then
-            fu.notification("Ошибка экипировки пистолета!")
-            return
-        end
-
-        fu.notification("Выстрел по кнопке/бинду!")
-        local predictedPosition = getPredictedPosition(murderer, shootOffset)
-        
-        -- Сборка аргументов для нового RemoteEvent
-        local args = {
-            [1] = 1,
-            [2] = predictedPosition,
-            [3] = "AH2"
-        }
-        
-        -- ОТПРАВКА НА НОВЫЙ ХУК ИЗ ReplicatedStorage
-        pcall(function()
-            ReplicatedStorage.WeaponEvents.GunBeam:FireServer(unpack(args))
-        end)
-    end
-
-    -- ==========================================
-    -- ПОТОК АВТО-ВЫСТРЕЛА YARHM (AUTO-SHOOT)
-    -- ==========================================
-    task.spawn(function()
-        while task.wait(0.5) do
-            if findSheriff() == LocalPlayer and autoShooting then
-                fu.notification("Auto-shooting started.")
-                repeat
-                    task.wait(0.1)
-                    if not autoShooting then break end
-                    
-                    local murderer = findMurderer()
-                    if not murderer or not murderer.Character then continue end
-                    
-                    local murdererHRP = murderer.Character:FindFirstChild("HumanoidRootPart") or murderer.Character:FindFirstChild("UpperTorso")
-                    local characterRootPart = LocalPlayer.Character and (LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Head"))
-                    
-                    if murdererHRP and characterRootPart then
-                        local rayDirection = murdererHRP.Position - characterRootPart.Position
-                        local raycastParams = RaycastParams.new()
-                        raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-                        raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
-        
-                        local hit = workspace:Raycast(characterRootPart.Position, rayDirection, raycastParams)
-                        if not hit or hit.Instance:IsDescendantOf(murderer.Character) then 
-                            fu.notification("Auto-shooting!")
-                            
-                            if not LocalPlayer.Character:FindFirstChild("Gun") then
-                                if LocalPlayer.Backpack:FindFirstChild("Gun") then
-                                    LocalPlayer.Character.Humanoid:EquipTool(LocalPlayer.Backpack.Gun)
-                                    task.wait(0.1)
-                                else
-                                    continue
-                                end
-                            end
-                            
-                            local predictedPosition = getPredictedPosition(murderer, shootOffset)
-                            local args = {
-                                [1] = 1,
-                                [2] = predictedPosition,
-                                [3] = "AH2"
-                            }
-                            
-                            -- ОТПРАВКА НА НОВЫЙ ХУК ИЗ ReplicatedStorage
-                            pcall(function()
-                                ReplicatedStorage.WeaponEvents.GunBeam:FireServer(unpack(args))
-                            end)
-                        end
-                    end
-                until findSheriff() ~= LocalPlayer or not autoShooting
-            end
-        end
-    end)
-
-    -- ==========================================
-    -- UI ЭЛЕМЕНТЫ В COMBAT TAB (RAYFIELD)
-    -- ==========================================
-    CombatTab:CreateSection("Hitbox Assistant")
-    
-    CombatTab:CreateToggle({
-        Name = "Увеличить хитбокс Мардера",
-        CurrentValue = false,
-        Flag = "MurdererHitboxToggle",
-        Callback = function(Value)
-            HitboxEnabled = Value
-            if not Value then
-                for player, data in pairs(OriginalSizes) do
-                    if player.Character and player.Character:FindFirstChild("Head") then
-                        local head = player.Character.Head
-                        head.Size = data.Size
-                        head.Transparency = data.Transparency
-                        head.CanCollide = data.CanCollide
-                    end
-                end
-                table.clear(OriginalSizes)
-            end
-        end
-    })
-    
-    CombatTab:CreateSlider({
-        Name = "Размер хитбокса головы",
-        Range = {2, 50},
-        Increment = 1,
-        Suffix = " studs",
-        CurrentValue = 20,
-        Flag = "HitboxSizeSlider",
-        Callback = function(Value)
-            HitboxSize = Value
-        end
-    })
-
-    CombatTab:CreateSection("YARHM Auto-Shoot Aimbot")
-
-    CombatTab:CreateToggle({
-        Name = "Включить YARHM Авто-выстрел",
-        CurrentValue = false,
-        Flag = "YarhmAutoShootToggle",
-        Callback = function(Value)
-            autoShooting = Value
-        end
-    })
-
-    CombatTab:CreateSlider({
-        Name = "Смещение упреждения (Shoot Offset)",
-        Range = {1, 15},
-        Increment = 1,
-        Suffix = " units",
-        CurrentValue = 5,
-        Flag = "YarhmShootOffsetSlider",
-        Callback = function(Value)
-            shootOffset = Value
-        end
-    })
-
-    CombatTab:CreateKeybind({
-        Name = "Клавиша мгновенного выстрела",
-        CurrentKeybind = "R",
-        Default = "R",        
-        Keybind = "R",        
-        HoldToInteract = false,
-        Flag = "InstantShotKeybind",
-        Callback = function()
-            performInstantShot()
-        end
-    })
-
-    CombatTab:CreateSection("Trigger Bot")
-
-    CombatTab:CreateToggle({
-        Name = "Включить Триггербот (При наведении)",
-        CurrentValue = false,
-        Flag = "TriggerBotToggle",
-        Callback = function(Value)
-            TriggerBotEnabled = Value
-        end
-    })
-
-    -- ==========================================
-    -- РАБОЧИЙ ЦИКЛ ХИТБОКСОВ И ТРИГГЕРБОТА
-    -- ==========================================
-    RunService.RenderStepped:Connect(function()
-        if HitboxEnabled then
-            for _, Player in ipairs(Players:GetPlayers()) do
-                if Player ~= LocalPlayer and Player.Character then
-                    local isMurderer = (Player.Character:FindFirstChild("Knife") or (Player:FindFirstChild("Backpack") and Player.Backpack:FindFirstChild("Knife")))
-                    local head = Player.Character:FindFirstChild("Head")
-                    
-                    if head and head:IsA("BasePart") and head.Name == "Head" then
-                        if isMurderer then
-                            if not OriginalSizes[Player] then
-                                OriginalSizes[Player] = {
-                                    Size = head.Size,
-                                    Transparency = head.Transparency,
-                                    CanCollide = head.CanCollide
-                                }
-                            end
-                            head.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
-                            head.Transparency = 0.6 
-                            head.CanCollide = false 
-                            head.Massless = true           
-                        else
-                            if OriginalSizes[Player] then
-                                head.Size = OriginalSizes[Player].Size
-                                head.Transparency = OriginalSizes[Player].Transparency
-                                head.CanCollide = OriginalSizes[Player].CanCollide
-                                OriginalSizes[Player] = nil
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
-        if TriggerBotEnabled then
-            local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
-            if Gun and (tick() - LastTriggerShotTime > 0.4) then 
-                local targetPart = Mouse.Target
-                if targetPart then
-                    local characterModel = targetPart:FindFirstAncestorOfClass("Model")
-                    local hoveredPlayer = characterModel and Players:GetPlayerFromCharacter(characterModel)
-                    
-                    if hoveredPlayer and hoveredPlayer ~= LocalPlayer and hoveredPlayer.Character then
-                        local isMurderer = (hoveredPlayer.Character:FindFirstChild("Knife") or (hoveredPlayer:FindFirstChild("Backpack") and hoveredPlayer.Backpack:FindFirstChild("Knife")))
-                        local humanoid = hoveredPlayer.Character:FindFirstChildOfClass("Humanoid")
-                        
-                        if isMurderer and humanoid and humanoid.Health > 0 then
-                            LastTriggerShotTime = tick()
-                            Gun:Activate()
-                        end
-                    end
-                end
-            end
-        end
-    end)
+function Library:Tween(object, info, properties)
+    local tween = TweenService:Create(object, TweenInfo.new(unpack(info)), properties)
+    tween:Play()
+    return tween
 end
+
+function Library:CreateWindow(config)
+    local WindowName = config.Name or "Xeno Menu"
+    
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "RayfieldStyleMenu"
+    ScreenGui.Parent = game:GetService("CoreGui")
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    -- Главное окно
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Name = "MainFrame"
+    MainFrame.Position = UDim2.new(0.5, -275, 0.5, -175)
+    MainFrame.Size = UDim2.new(0, 550, 0, 350)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Parent = ScreenGui
+
+    -- Закругление краев главного окна
+    local MainCorner = Instance.new("UICorner")
+    MainCorner.CornerRadius = UDim.new(0, 10)
+    MainCorner.Parent = MainFrame
+
+    -- Заголовок активной вкладки по центру сверху
+    local TopTabTitle = Instance.new("TextLabel")
+    TopTabTitle.Name = "TopTabTitle"
+    TopTabTitle.Position = UDim2.new(0, 160, 0, 12)
+    TopTabTitle.Size = UDim2.new(1, -210, 0, 25)
+    TopTabTitle.BackgroundTransparency = 1
+    TopTabTitle.Text = "Select a Tab"
+    TopTabTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TopTabTitle.Font = Enum.Font.GothamBold
+    TopTabTitle.TextSize = 16
+    TopTabTitle.TextXAlignment = Enum.TextXAlignment.Center
+    TopTabTitle.Parent = MainFrame
+
+    -- Кнопка закрытия меню (X) справа сверху
+    local CloseButton = Instance.new("TextButton")
+    CloseButton.Name = "CloseButton"
+    CloseButton.Position = UDim2.new(1, -35, 0, 12)
+    CloseButton.Size = UDim2.new(0, 23, 0, 23)
+    CloseButton.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    CloseButton.Text = "✕"
+    CloseButton.TextColor3 = Color3.fromRGB(255, 75, 75)
+    CloseButton.Font = Enum.Font.GothamBold
+    CloseButton.TextSize = 12
+    CloseButton.Parent = MainFrame
+
+    local CloseCorner = Instance.new("UICorner")
+    CloseCorner.CornerRadius = UDim.new(0, 6)
+    CloseCorner.Parent = CloseButton
+
+    CloseButton.MouseButton1Click:Connect(function()
+        ScreenGui:Destroy()
+    end)
+
+    -- Бинд на кнопку K для открытия/закрытия меню
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.KeyCode == Enum.KeyCode.K then
+            ScreenGui.Enabled = not ScreenGui.Enabled
+        end
+    end)
+
+    -- Тултип (подсказки)
+    local Tooltip = Instance.new("TextLabel")
+    Tooltip.Name = "Tooltip"
+    Tooltip.Size = UDim2.new(0, 180, 0, 0)
+    Tooltip.AutomaticSize = Enum.AutomaticSize.Y
+    Tooltip.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    Tooltip.TextColor3 = Color3.fromRGB(200, 200, 200)
+    Tooltip.Font = Enum.Font.Gotham
+    Tooltip.TextSize = 12
+    Tooltip.TextWrapped = true
+    Tooltip.Visible = false
+    Tooltip.ZIndex = 10
+    Tooltip.Parent = ScreenGui
+    
+    local TooltipPadding = Instance.new("UIPadding")
+    TooltipPadding.PaddingTop = UDim.new(0, 6)
+    TooltipPadding.PaddingBottom = UDim.new(0, 6)
+    TooltipPadding.PaddingLeft = UDim.new(0, 6)
+    TooltipPadding.PaddingRight = UDim.new(0, 6)
+    TooltipPadding.Parent = Tooltip
+
+    -- Логика перетаскивания (Drag)
+    local dragging, dragInput, dragStart, startPos
+    MainFrame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = MainFrame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    MainFrame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then dragInput = input end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+
+    -- Боковая панель
+    local SideBar = Instance.new("Frame")
+    SideBar.Name = "SideBar"
+    SideBar.Size = UDim2.new(0, 150, 1, 0)
+    SideBar.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    SideBar.BorderSizePixel = 0
+    SideBar.Parent = MainFrame
+
+    local SideCorner = Instance.new("UICorner")
+    SideCorner.CornerRadius = UDim.new(0, 10)
+    SideCorner.Parent = SideBar
+
+    local TabLayout = Instance.new("UIListLayout")
+    TabLayout.Parent = SideBar
+    TabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    TabLayout.Padding = UDim.new(0, 6)
+    
+    local SidePadding = Instance.new("UIPadding")
+    SidePadding.PaddingTop = UDim.new(0, 10)
+    SidePadding.PaddingLeft = UDim.new(0, 8)
+    SidePadding.PaddingRight = UDim.new(0, 8)
+    SidePadding.Parent = SideBar
+
+    -- Контейнер для контента (опущен чуть ниже, чтобы уступить место заголовку)
+    local Container = Instance.new("Frame")
+    Container.Name = "Container"
+    Container.Position = UDim2.new(0, 165, 0, 45)
+    Container.Size = UDim2.new(1, -175, 1, -55)
+    Container.BackgroundTransparency = 1
+    Container.Parent = MainFrame
+
+    function Library:AddTooltip(element, text)
+        local hoverToken = 0
+        element.MouseEnter:Connect(function()
+            hoverToken = hoverToken + 1
+            local currentToken = hoverToken
+            task.wait(Library.TooltipDelay)
+            if currentToken == hoverToken then
+                Tooltip.Text = text
+                Tooltip.Visible = true
+                
+                local connection
+                connection = game:GetService("RunService").RenderStepped:Connect(function()
+                    if not Tooltip.Visible then connection:Disconnect() return end
+                    Tooltip.Position = UDim2.new(0, Mouse.X + 15, 0, Mouse.Y + 15)
+                end)
+            end
+        end)
+        element.MouseLeave:Connect(function()
+            hoverToken = hoverToken + 1
+            Tooltip.Visible = false
+        end)
+    end
+
+    local WindowAPI = {}
+    function WindowAPI:CreateTab(tabName)
+        -- Кнопка вкладки
+        local TabButton = Instance.new("TextButton")
+        TabButton.Size = UDim2.new(1, 0, 0, 32)
+        TabButton.BackgroundColor3 = Color3.fromRGB(32, 32, 32)
+        TabButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+        TabButton.Text = tabName
+        TabButton.Font = Enum.Font.GothamMedium
+        TabButton.TextSize = 13
+        TabButton.Parent = SideBar
+
+        local TabBtnCorner = Instance.new("UICorner")
+        TabBtnCorner.CornerRadius = UDim.new(0, 6)
+        TabBtnCorner.Parent = TabButton
+
+        -- Страница с функциями
+        local Page = Instance.new("ScrollingFrame")
+        Page.Size = UDim2.new(1, 0, 1, 0)
+        Page.BackgroundTransparency = 1
+        Page.Visible = false
+        Page.CanvasSize = UDim2.new(0, 0, 0, 0)
+        Page.ScrollBarThickness = 2
+        Page.ScrollBarImageColor3 = Color3.fromRGB(50, 50, 50)
+        Page.Parent = Container
+
+        local PageLayout = Instance.new("UIListLayout")
+        PageLayout.Parent = Page
+        PageLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        PageLayout.Padding = UDim.new(0, 6)
+        
+        -- ИСПРАВЛЕННЫЙ ХЕНДЛЕР: Теперь холст динамически расширяется и показывает функции!
+        PageLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            Page.CanvasSize = UDim2.new(0, 0, 0, PageLayout.AbsoluteContentSize.Y + 15)
+        end)
+
+        -- Логика переключения
+        local function SelectThisTab()
+            if Library.CurrentTab then
+                Library.CurrentTab.Page.Visible = false
+                Library.CurrentTab.Button.BackgroundColor3 = Color3.fromRGB(32, 32, 32)
+                Library.CurrentTab.Button.TextColor3 = Color3.fromRGB(200, 200, 200)
+            end
+            Page.Visible = true
+            TopTabTitle.Text = tabName:upper() -- Меняем текст по центру сверху
+            TabButton.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+            TabButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+            Library.CurrentTab = {Page = Page, Button = TabButton}
+        end
+
+        TabButton.MouseButton1Click:Connect(SelectThisTab)
+
+        -- Если это самая первая вкладка — активируем её сразу
+        if not Library.CurrentTab then
+            SelectThisTab()
+        end
+
+        -- Безопасный загрузчик компонентов
+        local TabAPI = {}
+        local baseUrl = "https://raw.githubusercontent.com/geragori11/XMENUE/refs/heads/main/UI/options/"
+        local optCache = "?t=" .. math.random(1, 999999)
+        
+        local function loadModule(fileName, ...)
+            local targetUrl = baseUrl .. fileName .. optCache
+            local success, code = pcall(game.HttpGet, game, targetUrl)
+            if not success or not code then return error("Не удалось загрузить компонент: " .. fileName) end
+            
+            local chunk, err = loadstring(code)
+            if not chunk then return error("Ошибка синтаксиса в " .. fileName .. ": " .. tostring(err)) end
+            
+            return chunk()(...)
+        end
+
+        function TabAPI:AddText(text)
+            return loadModule("text.lua", Page, text, Library)
+        end
+
+        function TabAPI:AddKeybind(config)
+            return loadModule("keybind.lua", Page, config, Library)
+        end
+
+        function TabAPI:AddSlider(config)
+            return loadModule("slidermove.lua", Page, config, Library)
+        end
+
+        function TabAPI:AddColorpicker(config)
+            return loadModule("colorpicker.lua", Page, config, Library)
+        end
+
+        return TabAPI
+    end
+
+    return WindowAPI
+end
+
+return Library
