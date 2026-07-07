@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Murder Mystery 2: Универсальный Rage Multipoint Aimbot + UI Wrapper
--- Адаптация под ограничения Xeno Executor (Bypass через Phantom Hitbox)
--- Логика: Генерация локальной цели в 0.2 студах для 100% локальной регистрации
+-- Модификация: Создание ОГРОМНОГО локального хитбокса прямо НА Мардере
+-- Логика: Авто-позиционирование фантомного парта на цели для легитного вида выстрела
 -- =========================================================================
 
 local OFFSETS_HEAD = {}
@@ -60,15 +60,14 @@ return function(Window)
     local hvhlShotCooldown = 0.3   
     local lastHvHShotTime = 0
 
-    -- Создаем постоянный локальный фантомный хитбокс
+    -- Создаем постоянный локальный фантомный хитбокс (который будет раздуваться на Мардере)
     local PhantomHitbox = Instance.new("Part")
-    PhantomHitbox.Size = Vector3.new(2, 2, 2)
-    PhantomHitbox.Transparency = 0.7 -- Поставь 1, чтобы полностью скрыть деталь от глаз
+    PhantomHitbox.Transparency = 0.7 -- Поставь 1, чтобы полностью скрыть огромный красный куб
     PhantomHitbox.Color = Color3.fromRGB(255, 0, 0)
     PhantomHitbox.CanCollide = false
     PhantomHitbox.Anchored = true
     PhantomHitbox.Material = Enum.Material.ForceField
-    PhantomHitbox.Name = "LocalPhantomHitbox"
+    PhantomHitbox.Name = "LocalTargetPhantomHitbox"
     PhantomHitbox.Parent = nil 
 
     local wallCheckParams = RaycastParams.new()
@@ -97,7 +96,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- ХУКИ И ПЕРЕХВАТ ДАННЫХ (МЕТАТАБЛИЦЫ ДЛЯ SILENT AIM)
+    -- ХУКИ И ПЕРЕХВАТ ДАННЫХ (МЕТАТАБЛИЦЫ ДЛЯ НАПРАВЛЕНИЯ В ХИТБОКС)
     -- ==========================================
     local Hooked = false
     local hasHook = typeof(hookmetamethod) == "function"
@@ -249,7 +248,7 @@ return function(Window)
     })
     
     CombatTab:CreateSlider({
-        Name = "Размер хитбокса (Головы)",
+        Name = "Размер хитбокса (Головы/Фантома)",
         Range = {2, 40},
         Increment = 1,
         Suffix = " studs",
@@ -354,7 +353,7 @@ return function(Window)
                                 OriginalSizes[Player] = {
                                     Size = head.Size,
                                     Transparency = head.Transparency,
-                                    CanCollide = head.CanCollide
+                                    CanCollide = data.CanCollide
                                 }
                             end
                             head.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
@@ -374,7 +373,7 @@ return function(Window)
             end
         end
 
-        -- 2. Логика Интегрированного HvH С ФАНТОМНЫМ ХИТБОКСОМ
+        -- 2. Логика HvH: Раздувание ОГРОМНОГО хитбокса ПРЯМО НА МАРДЕРЕ
         if HvHAimEnabled and CurrentMurderer then
             AimEnabled = true
             AimReactionTime = 0
@@ -425,18 +424,17 @@ return function(Window)
                         end
 
                         if bestPointFound then
-                            local myPos = myRoot.Position
-                            local directionToMurderer = (bestPointFound - myPos).Unit
-                            
-                            -- Помещаем фантомный хитбокс строго в 0.2 студах от нашего персонажа
-                            PhantomHitbox.Position = myPos + (directionToMurderer * 0.2)
+                            -- Изменяем размер фантомного парта до ОГРОМНОГО (берется из слайдера)
+                            PhantomHitbox.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
+                            -- Переносим его прямо в точку на Мардере
+                            PhantomHitbox.Position = bestPointFound
                             PhantomHitbox.Parent = workspace
                             
                             local currentTime = os.clock()
                             if currentTime - lastHvHShotTime >= hvhlShotCooldown then
                                 lastHvHShotTime = currentTime
                                 
-                                -- Выстрел. Хуки направят пулю локально в PhantomHitbox
+                                -- Наш хук подменит траекторию прямо в этот огромный куб на Мардере
                                 gun:Activate()
                             end
                         else
