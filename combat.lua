@@ -1,274 +1,515 @@
--- UI/core.lua
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local Mouse = LocalPlayer:GetMouse()
+-- =========================================================================
+-- Murder Mystery 2: Универсальный Rage Multipoint Aimbot + UI Wrapper
+-- Исправление: Синхронизация Phantom Hitbox с костями и регистрацией MM2
+-- Логика: Внедрение хитбокса в модель Мардера + подмена Target на реальную Head
+-- =========================================================================
 
-local Library = {
-    CurrentTab = nil,
-    TooltipDelay = 0.6
-}
+local OFFSETS_HEAD = {}
+local OFFSETS_TORSO = {}
+local OFFSETS_LIMBS = {}
 
-function Library:Tween(object, info, properties)
-    local tween = TweenService:Create(object, TweenInfo.new(unpack(info)), properties)
-    tween:Play()
-    return tween
+-- Предгенерация сетки смещений (Матрица точек)
+local function precomputeGrid(steps, targetTable)
+    for x = 1, steps do
+        for y = 1, steps do
+            for z = 1, steps do
+                table.insert(targetTable, Vector3.new(
+                    -0.5 + (x - 1) / (steps - 1),
+                    -0.5 + (y - 1) / (steps - 1),
+                    -0.5 + (z - 1) / (steps - 1)
+                ))
+            end
+        end
+    end
 end
 
-function Library:CreateWindow(config)
-    local WindowName = config.Name or "Xeno Menu"
+precomputeGrid(4, OFFSETS_HEAD)   -- 64 точки
+precomputeGrid(5, OFFSETS_TORSO)  -- 125 точек
+precomputeGrid(4, OFFSETS_LIMBS)  -- 64 точки на каждую конечность
+
+return function(Window)
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local LocalPlayer = Players.LocalPlayer
+    local Mouse = LocalPlayer:GetMouse()
+    local Camera = workspace.CurrentCamera
     
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "RayfieldStyleMenu"
-    ScreenGui.Parent = game:GetService("CoreGui")
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
-    -- Главное окно
-    local MainFrame = Instance.new("Frame")
-    MainFrame.Name = "MainFrame"
-    MainFrame.Position = UDim2.new(0.5, -275, 0.5, -175)
-    MainFrame.Size = UDim2.new(0, 550, 0, 350)
-    MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    MainFrame.BorderSizePixel = 0
-    MainFrame.Parent = ScreenGui
-
-    -- Закругление краев главного окна
-    local MainCorner = Instance.new("UICorner")
-    MainCorner.CornerRadius = UDim.new(0, 10)
-    MainCorner.Parent = MainFrame
-
-    -- Заголовок активной вкладки по центру сверху
-    local TopTabTitle = Instance.new("TextLabel")
-    TopTabTitle.Name = "TopTabTitle"
-    TopTabTitle.Position = UDim2.new(0, 160, 0, 12)
-    TopTabTitle.Size = UDim2.new(1, -210, 0, 25)
-    TopTabTitle.BackgroundTransparency = 1
-    TopTabTitle.Text = "Select a Tab"
-    TopTabTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
-    TopTabTitle.Font = Enum.Font.GothamBold
-    TopTabTitle.TextSize = 16
-    TopTabTitle.TextXAlignment = Enum.TextXAlignment.Center
-    TopTabTitle.Parent = MainFrame
-
-    -- Кнопка закрытия меню (X) справа сверху
-    local CloseButton = Instance.new("TextButton")
-    CloseButton.Name = "CloseButton"
-    CloseButton.Position = UDim2.new(1, -35, 0, 12)
-    CloseButton.Size = UDim2.new(0, 23, 0, 23)
-    CloseButton.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    CloseButton.Text = "✕"
-    CloseButton.TextColor3 = Color3.fromRGB(255, 75, 75)
-    CloseButton.Font = Enum.Font.GothamBold
-    CloseButton.TextSize = 12
-    CloseButton.Parent = MainFrame
-
-    local CloseCorner = Instance.new("UICorner")
-    CloseCorner.CornerRadius = UDim.new(0, 6)
-    CloseCorner.Parent = CloseButton
-
-    CloseButton.MouseButton1Click:Connect(function()
-        ScreenGui:Destroy()
-    end)
-
-    -- Бинд на кнопку K для открытия/закрытия меню
-    UserInputService.InputBegan:Connect(function(input, processed)
-        if processed then return end
-        if input.KeyCode == Enum.KeyCode.K then
-            ScreenGui.Enabled = not ScreenGui.Enabled
-        end
-    end)
-
-    -- Тултип (подсказки)
-    local Tooltip = Instance.new("TextLabel")
-    Tooltip.Name = "Tooltip"
-    Tooltip.Size = UDim2.new(0, 180, 0, 0)
-    Tooltip.AutomaticSize = Enum.AutomaticSize.Y
-    Tooltip.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    Tooltip.TextColor3 = Color3.fromRGB(200, 200, 200)
-    Tooltip.Font = Enum.Font.Gotham
-    Tooltip.TextSize = 12
-    Tooltip.TextWrapped = true
-    Tooltip.Visible = false
-    Tooltip.ZIndex = 10
-    Tooltip.Parent = ScreenGui
+    local CombatTab = Window:CreateTab("COMBAT", 4483362458)
     
-    local TooltipPadding = Instance.new("UIPadding")
-    TooltipPadding.PaddingTop = UDim.new(0, 6)
-    TooltipPadding.PaddingBottom = UDim.new(0, 6)
-    TooltipPadding.PaddingLeft = UDim.new(0, 6)
-    TooltipPadding.PaddingRight = UDim.new(0, 6)
-    TooltipPadding.Parent = Tooltip
+    -- --- ПЕРЕМЕННЫЕ ХИТБОКСА ---
+    local HitboxEnabled = false
+    local HitboxSize = 15
+    local OriginalSizes = {} 
+    
+    -- --- ПЕРЕМЕННЫЕ АВТОАИМА (SILENT) ---
+    local AimEnabled = false
+    local AimReactionTime = 0 
+    local AutoShootEnabled = false
+    local AimTarget = nil
+    local LastTarget = nil
+    local TargetTime = 0
+    local LastShotTime = 0
 
-    -- Логика перетаскивания (Drag)
-    local dragging, dragInput, dragStart, startPos
-    MainFrame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            dragStart = input.Position
-            startPos = MainFrame.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+    -- --- ПЕРЕМЕННЫЕ ТРИГГЕРБОТА ---
+    local TriggerBotEnabled = false
+    local LastTriggerShotTime = 0
+
+    -- --- ПЕРЕМЕННЫЕ HVH SNAP AIMBOT (XENO) ---
+    local HvHAimEnabled = false
+    local HvHAutoEquip = false
+    local hvhlShotCooldown = 0.3   
+    local lastHvHShotTime = 0
+
+    -- Создаем локальный фантомный хитбокс
+    local PhantomHitbox = Instance.new("Part")
+    PhantomHitbox.Transparency = 0.7 -- Поставь 1, чтобы сделать куб полностью невидимым
+    PhantomHitbox.Color = Color3.fromRGB(255, 0, 0)
+    PhantomHitbox.CanCollide = false
+    PhantomHitbox.Anchored = true
+    PhantomHitbox.Material = Enum.Material.ForceField
+    PhantomHitbox.Name = "Head" -- Мимикрируем под голову для простейших проверок
+    PhantomHitbox.Parent = nil 
+
+    local wallCheckParams = RaycastParams.new()
+    wallCheckParams.FilterType = Enum.RaycastFilterType.Exclude
+    wallCheckParams.IgnoreWater = true
+
+    -- ==========================================
+    -- ФУНКЦИЯ ПРОВЕРКИ СТЕН (WALL CHECK)
+    -- ==========================================
+    local function IsVisible(TargetPlayer)
+        local Character = LocalPlayer.Character
+        local TargetCharacter = TargetPlayer.Character
+        if not Character or not TargetCharacter then return false end
+        
+        local Origin = Character:FindFirstChild("HumanoidRootPart") or Character:FindFirstChild("Head")
+        local Destination = TargetCharacter:FindFirstChild("HumanoidRootPart") or TargetCharacter:FindFirstChild("Head")
+        if not Origin or not Destination then return false end
+        
+        local RayParams = RaycastParams.new()
+        RayParams.FilterType = Enum.RaycastFilterType.Exclude
+        RayParams.FilterDescendantsInstances = {Character, TargetCharacter, Camera, PhantomHitbox}
+        RayParams.IgnoreWater = true
+        
+        local RayResult = workspace:Raycast(Origin.Position, Destination.Position - Origin.Position, RayParams)
+        return RayResult == nil
+    end
+
+    -- ==========================================
+    -- УЛЬТРА-ХУКИ ДЛЯ ИДЕАЛЬНОЙ РЕГИСТРАЦИИ ХИТОВ
+    -- ==========================================
+    local Hooked = false
+    local hasHook = typeof(hookmetamethod) == "function"
+    local hasCheck = typeof(checkcaller) == "function"
+    local hasNamecallGetter = typeof(getnamecallmethod) == "function"
+
+    if hasHook and hasCheck and hasNamecallGetter then
+        pcall(function()
+            local oldIndex
+            oldIndex = hookmetamethod(game, "__index", function(self, key)
+                if not checkcaller() and (AimEnabled or HvHAimEnabled) and AimTarget and AimTarget.Character then
+                    if typeof(self) == "Instance" and self.ClassName == "Mouse" then
+                        local realPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
+                        if realPart then
+                            if key == "Hit" then 
+                                -- Пуля летит в координаты Огромного Хитбокса
+                                return HvHAimEnabled and PhantomHitbox.CFrame or realPart.CFrame
+                            elseif key == "Target" then 
+                                -- Но игра думает, что мы навелись на РЕАЛЬНУЮ голову (100% регистрация)
+                                return realPart 
+                            elseif key == "X" or key == "Y" then
+                                local targetPos = HvHAimEnabled and PhantomHitbox.Position or realPart.Position
+                                local screenPos, onScreen = Camera:WorldToViewportPoint(targetPos)
+                                if onScreen then
+                                    if key == "X" then return screenPos.X end
+                                    if key == "Y" then return screenPos.Y end
+                                end
+                            end
+                        end
+                    end
+                end
+                return oldIndex(self, key)
             end)
-        end
-    end)
-    MainFrame.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement then dragInput = input end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if input == dragInput and dragging then
-            local delta = input.Position - dragStart
-            MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        end
-    end)
 
-    -- Боковая панель
-    local SideBar = Instance.new("Frame")
-    SideBar.Name = "SideBar"
-    SideBar.Size = UDim2.new(0, 150, 1, 0)
-    SideBar.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    SideBar.BorderSizePixel = 0
-    SideBar.Parent = MainFrame
-
-    local SideCorner = Instance.new("UICorner")
-    SideCorner.CornerRadius = UDim.new(0, 10)
-    SideCorner.Parent = SideBar
-
-    local TabLayout = Instance.new("UIListLayout")
-    TabLayout.Parent = SideBar
-    TabLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    TabLayout.Padding = UDim.new(0, 6)
-    
-    local SidePadding = Instance.new("UIPadding")
-    SidePadding.PaddingTop = UDim.new(0, 10)
-    SidePadding.PaddingLeft = UDim.new(0, 8)
-    SidePadding.PaddingRight = UDim.new(0, 8)
-    SidePadding.Parent = SideBar
-
-    -- Контейнер для контента (опущен чуть ниже, чтобы уступить место заголовку)
-    local Container = Instance.new("Frame")
-    Container.Name = "Container"
-    Container.Position = UDim2.new(0, 165, 0, 45)
-    Container.Size = UDim2.new(1, -175, 1, -55)
-    Container.BackgroundTransparency = 1
-    Container.Parent = MainFrame
-
-    function Library:AddTooltip(element, text)
-        local hoverToken = 0
-        element.MouseEnter:Connect(function()
-            hoverToken = hoverToken + 1
-            local currentToken = hoverToken
-            task.wait(Library.TooltipDelay)
-            if currentToken == hoverToken then
-                Tooltip.Text = text
-                Tooltip.Visible = true
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+                local method = getnamecallmethod()
+                local args = {...}
                 
-                local connection
-                connection = game:GetService("RunService").RenderStepped:Connect(function()
-                    if not Tooltip.Visible then connection:Disconnect() return end
-                    Tooltip.Position = UDim2.new(0, Mouse.X + 15, 0, Mouse.Y + 15)
-                end)
-            end
-        end)
-        element.MouseLeave:Connect(function()
-            hoverToken = hoverToken + 1
-            Tooltip.Visible = false
+                if not checkcaller() and (AimEnabled or HvHAimEnabled) and AimTarget and AimTarget.Character then
+                    local realHead = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
+                    if realHead then
+                        if typeof(self) == "Instance" and self.ClassName == "Camera" then
+                            if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
+                                local OriginPos = Camera.CFrame.Position
+                                local targetPos = HvHAimEnabled and PhantomHitbox.Position or realHead.Position
+                                local Direction = (targetPos - OriginPos).Unit * 1000
+                                return Ray.new(OriginPos, Direction)
+                            end
+                        end
+
+                        if method == "FireServer" or method == "InvokeServer" then
+                            local char = LocalPlayer.Character
+                            if char and char:FindFirstChild("Gun") then
+                                for i, arg in ipairs(args) do
+                                    if typeof(arg) == "Vector3" then
+                                        args[i] = HvHAimEnabled and PhantomHitbox.Position or realHead.Position
+                                    end
+                                end
+                                return oldNamecall(self, unpack(args))
+                            end
+                        end
+                    end
+                end
+                return oldNamecall(self, ...)
+            end)
+            Hooked = true
         end)
     end
 
-    local WindowAPI = {}
-    function WindowAPI:CreateTab(tabName)
-        -- Кнопка вкладки
-        local TabButton = Instance.new("TextButton")
-        TabButton.Size = UDim2.new(1, 0, 0, 32)
-        TabButton.BackgroundColor3 = Color3.fromRGB(32, 32, 32)
-        TabButton.TextColor3 = Color3.fromRGB(200, 200, 200)
-        TabButton.Text = tabName
-        TabButton.Font = Enum.Font.GothamMedium
-        TabButton.TextSize = 13
-        TabButton.Parent = SideBar
-
-        local TabBtnCorner = Instance.new("UICorner")
-        TabBtnCorner.CornerRadius = UDim.new(0, 6)
-        TabBtnCorner.Parent = TabButton
-
-        -- Страница с функциями
-        local Page = Instance.new("ScrollingFrame")
-        Page.Size = UDim2.new(1, 0, 1, 0)
-        Page.BackgroundTransparency = 1
-        Page.Visible = false
-        Page.CanvasSize = UDim2.new(0, 0, 0, 0)
-        Page.ScrollBarThickness = 2
-        Page.ScrollBarImageColor3 = Color3.fromRGB(50, 50, 50)
-        Page.Parent = Container
-
-        local PageLayout = Instance.new("UIListLayout")
-        PageLayout.Parent = Page
-        PageLayout.SortOrder = Enum.SortOrder.LayoutOrder
-        PageLayout.Padding = UDim.new(0, 6)
-        
-        -- ИСПРАВЛЕННЫЙ ХЕНДЛЕР: Теперь холст динамически расширяется и показывает функции!
-        PageLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-            Page.CanvasSize = UDim2.new(0, 0, 0, PageLayout.AbsoluteContentSize.Y + 15)
+    if not Hooked and typeof(getrawmetatable) == "function" and typeof(setreadonly) == "function" and typeof(newcclosure) == "function" and hasCheck and hasNamecallGetter then
+        pcall(function()
+            local mt = getrawmetatable(game)
+            local oldIndex = mt.__index
+            local oldNamecall = mt.__namecall
+            
+            setreadonly(mt, false)
+            
+            mt.__index = newcclosure(function(self, key)
+                if not checkcaller() and (AimEnabled or HvHAimEnabled) and AimTarget and AimTarget.Character then
+                    if typeof(self) == "Instance" and self.ClassName == "Mouse" then
+                        local realPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
+                        if realPart then
+                            if key == "Hit" then 
+                                return HvHAimEnabled and PhantomHitbox.CFrame or realPart.CFrame
+                            elseif key == "Target" then 
+                                return realPart
+                            elseif key == "X" or key == "Y" then
+                                local targetPos = HvHAimEnabled and PhantomHitbox.Position or realPart.Position
+                                local screenPos, onScreen = Camera:WorldToViewportPoint(targetPos)
+                                if onScreen then
+                                    if key == "X" then return screenPos.X end
+                                    if key == "Y" then return screenPos.Y end
+                                end
+                            end
+                        end
+                    end
+                end
+                return oldIndex(self, key)
+            end)
+            
+            mt.__namecall = newcclosure(function(self, ...)
+                local method = getnamecallmethod()
+                local args = {...}
+                if not checkcaller() and (AimEnabled or HvHAimEnabled) and AimTarget and AimTarget.Character then
+                    local realHead = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
+                    if realHead then
+                        if typeof(self) == "Instance" and self.ClassName == "Camera" then
+                            if method == "ViewportPointToRay" or method == "ScreenPointToRay" then
+                                local OriginPos = Camera.CFrame.Position
+                                local targetPos = HvHAimEnabled and PhantomHitbox.Position or realHead.Position
+                                local Direction = (targetPos - OriginPos).Unit * 1000
+                                return Ray.new(OriginPos, Direction)
+                            end
+                        end
+                        if method == "FireServer" or method == "InvokeServer" then
+                            local char = LocalPlayer.Character
+                            if char and char:FindFirstChild("Gun") then
+                                for i, arg in ipairs(args) do
+                                    if typeof(arg) == "Vector3" then
+                                        args[i] = HvHAimEnabled and PhantomHitbox.Position or realHead.Position
+                                    end
+                                end
+                                return oldNamecall(self, unpack(args))
+                            end
+                        end
+                    end
+                end
+                return oldNamecall(self, ...)
+            end)
+            
+            setreadonly(mt, true)
+            Hooked = true
         end)
-
-        -- Логика переключения
-        local function SelectThisTab()
-            if Library.CurrentTab then
-                Library.CurrentTab.Page.Visible = false
-                Library.CurrentTab.Button.BackgroundColor3 = Color3.fromRGB(32, 32, 32)
-                Library.CurrentTab.Button.TextColor3 = Color3.fromRGB(200, 200, 200)
-            end
-            Page.Visible = true
-            TopTabTitle.Text = tabName:upper() -- Меняем текст по центру сверху
-            TabButton.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
-            TabButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-            Library.CurrentTab = {Page = Page, Button = TabButton}
-        end
-
-        TabButton.MouseButton1Click:Connect(SelectThisTab)
-
-        -- Если это самая первая вкладка — активируем её сразу
-        if not Library.CurrentTab then
-            SelectThisTab()
-        end
-
-        -- Безопасный загрузчик компонентов
-        local TabAPI = {}
-        local baseUrl = "https://raw.githubusercontent.com/geragori11/XMENUE/refs/heads/main/UI/options/"
-        local optCache = "?t=" .. math.random(1, 999999)
-        
-        local function loadModule(fileName, ...)
-            local targetUrl = baseUrl .. fileName .. optCache
-            local success, code = pcall(game.HttpGet, game, targetUrl)
-            if not success or not code then return error("Не удалось загрузить компонент: " .. fileName) end
-            
-            local chunk, err = loadstring(code)
-            if not chunk then return error("Ошибка синтаксиса в " .. fileName .. ": " .. tostring(err)) end
-            
-            return chunk()(...)
-        end
-
-        function TabAPI:AddText(text)
-            return loadModule("text.lua", Page, text, Library)
-        end
-
-        function TabAPI:AddKeybind(config)
-            return loadModule("keybind.lua", Page, config, Library)
-        end
-
-        function TabAPI:AddSlider(config)
-            return loadModule("slidermove.lua", Page, config, Library)
-        end
-
-        function TabAPI:AddColorpicker(config)
-            return loadModule("colorpicker.lua", Page, config, Library)
-        end
-
-        return TabAPI
     end
 
-    return WindowAPI
+    -- ==========================================
+    -- СОЗДАНИЕ ЭЛЕМЕНТОВ ИНТЕРФЕЙСА (UI)
+    -- ==========================================
+    CombatTab:CreateSection("Hitbox Assistant")
+    
+    CombatTab:CreateToggle({
+        Name = "Увеличить хитбокс Мардера",
+        CurrentValue = false,
+        Flag = "MurdererHitboxToggle",
+        Callback = function(Value)
+            HitboxEnabled = Value
+            if not Value then
+                for player, data in pairs(OriginalSizes) do
+                    if player.Character and player.Character:FindFirstChild("Head") then
+                        local head = player.Character.Head
+                        head.Size = data.Size
+                        head.Transparency = data.Transparency
+                        head.CanCollide = data.CanCollide
+                    end
+                end
+                table.clear(OriginalSizes)
+            end
+        end
+    })
+    
+    CombatTab:CreateSlider({
+        Name = "Размер хитбокса (Головы/Фантома)",
+        Range = {2, 50},
+        Increment = 1,
+        Suffix = " studs",
+        CurrentValue = 20,
+        Flag = "HitboxSizeSlider",
+        Callback = function(Value)
+            HitboxSize = Value
+        end
+    })
+
+    CombatTab:CreateSection("Silent Aim")
+
+    CombatTab:CreateToggle({
+        Name = "Включить Магический Аим (Silent)",
+        CurrentValue = false,
+        Flag = "AutoAimToggle",
+        Callback = function(Value)
+            AimEnabled = Value
+            if not Value then
+                AimTarget = nil
+                LastTarget = nil
+            end
+        end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Время реакции (Задержка)",
+        Range = {0, 300},
+        Increment = 10,
+        Suffix = " ms",
+        CurrentValue = 0,
+        Flag = "AimReactionSlider",
+        Callback = function(Value)
+            AimReactionTime = Value
+        end
+    })
+
+    CombatTab:CreateToggle({
+        Name = "Автовыстрел (Auto Shoot)",
+        CurrentValue = false,
+        Flag = "AutoShootToggle",
+        Callback = function(Value)
+            AutoShootEnabled = Value
+        end
+    })
+
+    CombatTab:CreateSection("Trigger Bot")
+
+    CombatTab:CreateToggle({
+        Name = "Включить Триггербот (Auto Fire)",
+        CurrentValue = false,
+        Flag = "TriggerBotToggle",
+        Callback = function(Value)
+            TriggerBotEnabled = Value
+        end
+    })
+
+    CombatTab:CreateSection("HvH Snap Aimbot (Xeno)")
+
+    CombatTab:CreateToggle({
+        Name = "Включить HvH Snap Аим",
+        CurrentValue = false,
+        Flag = "HvHAimToggle",
+        Callback = function(Value)
+            HvHAimEnabled = Value
+        end
+    })
+
+    CombatTab:CreateToggle({
+        Name = "Авто-экипировка пистолета",
+        CurrentValue = false,
+        Flag = "HvHAutoEquipToggle",
+        Callback = function(Value)
+            HvHAutoEquip = Value
+        end
+    })
+
+    -- ==========================================
+    -- ЕДИНЫЙ ЦИКЛ ОБРАБОТКИ (RENDERSTEPPED)
+    -- ==========================================
+    RunService.RenderStepped:Connect(function()
+        local CurrentMurderer = nil
+
+        -- 1. Сканирование игроков
+        for _, Player in ipairs(Players:GetPlayers()) do
+            if Player ~= LocalPlayer and Player.Character then
+                local isMurderer = (Player.Character:FindFirstChild("Knife") or 
+                                    (Player:FindFirstChild("Backpack") and Player.Backpack:FindFirstChild("Knife")))
+                
+                if isMurderer then
+                    local humanoid = Player.Character:FindFirstChildOfClass("Humanoid")
+                    if humanoid and humanoid.Health > 0 and IsVisible(Player) then
+                        CurrentMurderer = Player
+                    end
+                end
+
+                if HitboxEnabled then
+                    local head = Player.Character:FindFirstChild("Head")
+                    if head and head:IsA("BasePart") and head.Name == "Head" and head ~= PhantomHitbox then
+                        if isMurderer then
+                            if not OriginalSizes[Player] then
+                                OriginalSizes[Player] = {
+                                    Size = head.Size,
+                                    Transparency = head.Transparency,
+                                    CanCollide = head.CanCollide
+                                }
+                            end
+                            head.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
+                            head.Transparency = 0.6 
+                            head.CanCollide = false 
+                            head.Massless = true     
+                        else
+                            if OriginalSizes[Player] then
+                                head.Size = OriginalSizes[Player].Size
+                                head.Transparency = OriginalSizes[Player].Transparency
+                                head.CanCollide = OriginalSizes[Player].CanCollide
+                                OriginalSizes[Player] = nil
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Своевременное обновление таргета для хуков метатаблиц
+        if CurrentMurderer then
+            AimTarget = CurrentMurderer
+        else
+            AimTarget = nil
+        end
+
+        -- 2. Логика HvH: Раздувание и инжекция ОГРОМНОГО хитбокса внутрь модели Мардера
+        if HvHAimEnabled and CurrentMurderer then
+            AimEnabled = true
+            AimReactionTime = 0
+            AutoShootEnabled = false 
+
+            local char = LocalPlayer.Character
+            local myRoot = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head"))
+            
+            if char and char:FindFirstChild("Humanoid") and myRoot then
+                local backpack = LocalPlayer:FindFirstChild("Backpack")
+                local gun = char:FindFirstChild("Gun") or (backpack and backpack:FindFirstChild("Gun"))
+
+                if gun then
+                    if gun.Parent == backpack and HvHAutoEquip then
+                        char.Humanoid:EquipTool(gun)
+                    elseif gun.Parent == char then
+                        
+                        local mChar = CurrentMurderer.Character
+                        wallCheckParams.FilterDescendantsInstances = {char, mChar:GetChildren(), PhantomHitbox}
+
+                        local hitboxes = {
+                            {part = mChar:FindFirstChild("Head"), offsets = OFFSETS_HEAD, priority = 3},
+                            {part = mChar:FindFirstChild("Torso") or mChar:FindFirstChild("UpperTorso"), offsets = OFFSETS_TORSO, priority = 2}
+                        }
+
+                        local cameraPos = Camera.CFrame.Position
+                        local bestPointFound = nil
+
+                        for i = 1, #hitboxes do
+                            local part = hitboxes[i].part
+                            if part and part:IsA("BasePart") and part ~= PhantomHitbox then
+                                local partCFrame = part.CFrame
+                                local partSize = part.Size
+                                local offsets = hitboxes[i].offsets
+                                
+                                for j = 1, #offsets do
+                                    local offset = offsets[j]
+                                    local worldPoint = partCFrame.Position + (partCFrame.RightVector * (offset.X * partSize.X)) + (partCFrame.UpVector * (offset.Y * partSize.Y)) + (partCFrame.LookVector * (offset.Z * partSize.Z))
+                                    local result = workspace:Raycast(cameraPos, worldPoint - cameraPos, wallCheckParams)
+                                    
+                                    if not result then
+                                        bestPointFound = worldPoint
+                                        break
+                                    end
+                                end
+                            end
+                            if bestPointFound then break end
+                        end
+
+                        if bestPointFound then
+                            -- Конфигурируем огромный фантом
+                            PhantomHitbox.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
+                            PhantomHitbox.Position = bestPointFound
+                            
+                            -- ПРИНУДИТЕЛЬНО пушим хитбокс в модель Мардера, чтобы игра засчитала ХИТ
+                            PhantomHitbox.Parent = mChar
+                            
+                            local currentTime = os.clock()
+                            if currentTime - lastHvHShotTime >= hvhlShotCooldown then
+                                lastHvHShotTime = currentTime
+                                
+                                -- Выстрел! Траектория идет в фантом, но хуки подменят деталь на настоящую голову
+                                gun:Activate()
+                            end
+                        else
+                            PhantomHitbox.Parent = nil
+                        end
+                    end
+                end
+            end
+        else
+            PhantomHitbox.Parent = nil
+        end
+
+        -- 3. Обработка обычного Silent Aim (Если HvH выключен)
+        if AimEnabled and not HvHAimEnabled then  
+            if CurrentMurderer then
+                if CurrentMurderer ~= LastTarget then
+                    LastTarget = CurrentMurderer
+                    TargetTime = tick() 
+                end
+
+                local elapsed = (tick() - TargetTime) * 1000 
+                if elapsed >= AimReactionTime then
+                    if AutoShootEnabled then
+                        local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
+                        if Gun and (tick() - LastShotTime > 0.4) then 
+                            LastShotTime = tick()
+                            Gun:Activate()
+                        end
+                    end
+                end
+            else
+                LastTarget = nil
+            end
+        end
+
+        -- 4. ЛОГИКА ТРИГГЕРБОТА (TRIGGER BOT)
+        if TriggerBotEnabled and not HvHAimEnabled then
+            local Gun = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Gun")
+            if Gun and (tick() - LastTriggerShotTime > 0.4) then 
+                local targetPart = Mouse.Target
+                if targetPart then
+                    local characterModel = targetPart:FindFirstAncestorOfClass("Model")
+                    local hoveredPlayer = characterModel and Players:GetPlayerFromCharacter(characterModel)
+                    
+                    if hoveredPlayer and hoveredPlayer ~= LocalPlayer and hoveredPlayer.Character then
+                        local isMurderer = (hoveredPlayer.Character:FindFirstChild("Knife") or 
+                                           (hoveredPlayer:FindFirstChild("Backpack") and hoveredPlayer.Backpack:FindFirstChild("Knife")))
+                        local humanoid = hoveredPlayer.Character:FindFirstChildOfClass("Humanoid")
+                        
+                        if isMurderer and humanoid and humanoid.Health > 0 then
+                            LastTriggerShotTime = tick()
+                            Gun:Activate()
+                        end
+                    end
+                end
+            end
+        end
+    end)
 end
-
-return Library
