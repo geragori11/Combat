@@ -2,6 +2,7 @@
 -- Murder Mystery 2: Универсальный Rage Multipoint Aimbot + UI Wrapper
 -- Исправление: Синхронизация Phantom Hitbox с костями и регистрацией MM2
 -- Логика: Внедрение хитбокса в модель Мардера + подмена Target на реальную Head
+-- Добавлено: Функция «Kill All» (Убить всех) для Мардера с локальным возвратом
 -- =========================================================================
 
 local OFFSETS_HEAD = {}
@@ -59,6 +60,9 @@ return function(Window)
     local HvHAutoEquip = false
     local hvhlShotCooldown = 0.3   
     local lastHvHShotTime = 0
+
+    -- --- СОСТОЯНИЕ KILL ALL ---
+    local isKillingAll = false
 
     -- Создаем локальный фантомный хитбокс
     local PhantomHitbox = Instance.new("Part")
@@ -334,6 +338,99 @@ return function(Window)
         Flag = "HvHAutoEquipToggle",
         Callback = function(Value)
             HvHAutoEquip = Value
+        end
+    })
+
+    -- --- НОВАЯ СЕКЦИЯ: ЭКСКЛЮЗИВ ДЛЯ МАРДЕРА ---
+    CombatTab:CreateSection("Murderer Exploits")
+
+    CombatTab:CreateButton({
+        Name = "Убить всех (Kill All)",
+        Callback = function()
+            if isKillingAll then return end
+            
+            local char = LocalPlayer.Character
+            if not char then return end
+            
+            local backpack = LocalPlayer:FindFirstChild("Backpack")
+            local knife = char:FindFirstChild("Knife") or (backpack and backpack:FindFirstChild("Knife"))
+            
+            -- Проверка наличия ножа у игрока
+            if not knife then
+                pcall(function()
+                    game:GetService("StarterGui"):SetCore("SendNotification", {
+                        Title = "MM2 Exploit",
+                        Text = "Вы не Мардер!",
+                        Duration = 4
+                    })
+                end)
+                return
+            end
+            
+            isKillingAll = true
+            
+            -- Экипируем нож, если он лежит в рюкзаке
+            if knife.Parent == backpack then
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    humanoid:EquipTool(knife)
+                end
+            end
+            
+            -- Сохраняем исходные координаты всех живых игроков
+            local originalCFrames = {}
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character then
+                    local root = player.Character:FindFirstChild("HumanoidRootPart")
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if root and hum and hum.Health > 0 then
+                        originalCFrames[player] = root.CFrame
+                    end
+                end
+            end
+            
+            local startTime = os.clock()
+            local killConnection
+            
+            killConnection = RunService.RenderStepped:Connect(function()
+                local myRoot = char:FindFirstChild("HumanoidRootPart")
+                
+                -- Выход из цикла: прошло 4 секунды, игрок погиб, либо пропал нож
+                if not myRoot or os.clock() - startTime >= 4 or not char:FindFirstChild("Knife") then
+                    killConnection:Disconnect()
+                    
+                    -- Сбрасываем и возвращаем выживших игроков на их исходные серверные координаты
+                    for player, cframe in pairs(originalCFrames) do
+                        if player.Character then
+                            local root = player.Character:FindFirstChild("HumanoidRootPart")
+                            if root then
+                                root.CFrame = cframe
+                            end
+                        end
+                    end
+                    isKillingAll = false
+                    return
+                end
+                
+                -- Координаты точки прямо перед Мардером (дистанция 2 стада)
+                local targetCFrame = myRoot.CFrame * CFrame.new(0, 0, -2)
+                
+                -- Каждыи кадр стягиваем всех к себе локально
+                for _, player in ipairs(Players:GetPlayers()) do
+                    if player ~= LocalPlayer and player.Character then
+                        local root = player.Character:FindFirstChild("HumanoidRootPart")
+                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                        if root and hum and hum.Health > 0 then
+                            root.CFrame = targetCFrame
+                        end
+                    end
+                end
+                
+                -- Авто-атака ножом
+                if knife and knife.Parent == char then
+                    knife:Activate()
+                end
+            end)
         end
     })
 
