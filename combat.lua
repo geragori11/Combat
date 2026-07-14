@@ -2,7 +2,7 @@
 -- Murder Mystery 2: Универсальный Rage Multipoint Aimbot + UI Wrapper
 -- Исправление: Синхронизация Phantom Hitbox с костями и регистрацией MM2
 -- Логика: Внедрение хитбокса в модель Мардера + подмена Target на реальную Head
--- Добавлено: Функция «Kill All» (Убить всех) для Мардера с локальным возвратом
+-- Добавлено: Kill All (Мардер) & Kill Murderer (Шериф) с локальным возвратом
 -- =========================================================================
 
 local OFFSETS_HEAD = {}
@@ -61,8 +61,9 @@ return function(Window)
     local hvhlShotCooldown = 0.3   
     local lastHvHShotTime = 0
 
-    -- --- СОСТОЯНИЕ KILL ALL ---
+    -- --- СОСТОЯНИЕ EXPLOITS ---
     local isKillingAll = false
+    local isKillingMurderer = false
 
     -- Создаем локальный фантомный хитбокс
     local PhantomHitbox = Instance.new("Part")
@@ -341,7 +342,7 @@ return function(Window)
         end
     })
 
-    -- --- НОВАЯ СЕКЦИЯ: ЭКСКЛЮЗИВ ДЛЯ МАРДЕРА ---
+    -- --- РАЗДЕЛ: ЭКСПЛОЙТЫ ДЛЯ МАРДЕРА ---
     CombatTab:CreateSection("Murderer Exploits")
 
     CombatTab:CreateButton({
@@ -415,7 +416,7 @@ return function(Window)
                 -- Координаты точки прямо перед Мардером (дистанция 2 стада)
                 local targetCFrame = myRoot.CFrame * CFrame.new(0, 0, -2)
                 
-                -- Каждыи кадр стягиваем всех к себе локально
+                -- Каждый кадр стягиваем всех к себе локально
                 for _, player in ipairs(Players:GetPlayers()) do
                     if player ~= LocalPlayer and player.Character then
                         local root = player.Character:FindFirstChild("HumanoidRootPart")
@@ -430,6 +431,102 @@ return function(Window)
                 if knife and knife.Parent == char then
                     knife:Activate()
                 end
+            end)
+        end
+    })
+
+    -- --- РАЗДЕЛ: ЭКСПЛОЙТЫ ДЛЯ ШЕРИФА ---
+    CombatTab:CreateSection("Sheriff Exploits")
+
+    CombatTab:CreateButton({
+        Name = "Убить Мардера (Kill Murderer)",
+        Callback = function()
+            if isKillingMurderer then return end
+
+            local char = LocalPlayer.Character
+            if not char then return end
+
+            local backpack = LocalPlayer:FindFirstChild("Backpack")
+            local gun = char:FindFirstChild("Gun") or (backpack and backpack:FindFirstChild("Gun"))
+
+            -- 1. Проверка наличия пистолета (роли Шерифа/Героя)
+            if not gun then
+                pcall(function()
+                    game:GetService("StarterGui"):SetCore("SendNotification", {
+                        Title = "MM2 Exploit",
+                        Text = "Вы не Шериф (нет пистолета)!",
+                        Duration = 4
+                    })
+                end)
+                return
+            end
+
+            -- 2. Поиск активного Мардера
+            local targetMurderer = nil
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character then
+                    local hasKnife = player.Character:FindFirstChild("Knife") or (player:FindFirstChild("Backpack") and player.Backpack:FindFirstChild("Knife"))
+                    if hasKnife then
+                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health > 0 then
+                            targetMurderer = player
+                            break
+                        end
+                    end
+                end
+            end
+
+            if not targetMurderer then
+                pcall(function()
+                    game:GetService("StarterGui"):SetCore("SendNotification", {
+                        Title = "MM2 Exploit",
+                        Text = "Мардер не найден или мертв!",
+                        Duration = 4
+                    })
+                end)
+                return
+            end
+
+            isKillingMurderer = true
+
+            -- Экипируем пистолет, если он лежит в инвентаре
+            if gun.Parent == backpack then
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    humanoid:EquipTool(gun)
+                end
+            end
+
+            -- Запоминаем оригинальную позицию Мардера перед телепортом
+            local originalCFrame = nil
+            local mRoot = targetMurderer.Character:FindFirstChild("HumanoidRootPart")
+            if mRoot then
+                originalCFrame = mRoot.CFrame
+            end
+
+            local startTime = os.clock()
+            local sheriffConnection
+
+            sheriffConnection = RunService.RenderStepped:Connect(function()
+                local myRoot = char:FindFirstChild("HumanoidRootPart")
+                local mChar = targetMurderer.Character
+                local curMRoot = mChar and mChar:FindFirstChild("HumanoidRootPart")
+                local mHum = mChar and mChar:FindFirstChildOfClass("Humanoid")
+
+                -- Прерывание: вышло время, мардер мертв, шериф мертв или убрал пистолет
+                if not myRoot or os.clock() - startTime >= 4 or not curMRoot or not mHum or mHum.Health <= 0 or not char:FindFirstChild("Gun") then
+                    sheriffConnection:Disconnect()
+                    
+                    -- Возвращаем Мардера на его реальную позицию
+                    if curMRoot and originalCFrame then
+                        curMRoot.CFrame = originalCFrame
+                    end
+                    isKillingMurderer = false
+                    return
+                end
+
+                -- Локально стягиваем Мардера прямо под прицел (на расстояние 4 студа лицом к тебе)
+                curMRoot.CFrame = myRoot.CFrame * CFrame.new(0, 0, -4)
             end)
         end
     })
