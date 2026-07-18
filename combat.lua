@@ -2,7 +2,7 @@
 -- Murder Mystery 2: Универсальный Rage Multipoint Aimbot + UI Wrapper
 -- Исправление: Синхронизация Phantom Hitbox с костями и регистрацией MM2
 -- Логика: Внедрение хитбокса в модель Мардера + подмена Target на реальную Head
--- Добавлено: Kill All (Мардер) & Kill Murderer (Шериф) с локальным возвратом
+-- Добавлено: Kill All, Kill Sheriff, Kill Target Player (с выбором из Dropdown)
 -- =========================================================================
 
 local OFFSETS_HEAD = {}
@@ -64,6 +64,9 @@ return function(Window)
     -- --- СОСТОЯНИЕ EXPLOITS ---
     local isKillingAll = false
     local isKillingMurderer = false
+    local isKillingSheriff = false
+    local isKillingTarget = false
+    local SelectedPlayerName = ""
 
     -- Создаем локальный фантомный хитбокс
     local PhantomHitbox = Instance.new("Part")
@@ -117,10 +120,8 @@ return function(Window)
                         local realPart = AimTarget.Character:FindFirstChild("Head") or AimTarget.Character:FindFirstChild("HumanoidRootPart")
                         if realPart then
                             if key == "Hit" then 
-                                -- Пуля летит в координаты Огромного Хитбокса
                                 return HvHAimEnabled and PhantomHitbox.CFrame or realPart.CFrame
                             elseif key == "Target" then 
-                                -- Но игра думает, что мы навелись на РЕАЛЬНУЮ голову (100% регистрация)
                                 return realPart 
                             elseif key == "X" or key == "Y" then
                                 local targetPos = HvHAimEnabled and PhantomHitbox.Position or realPart.Position
@@ -348,7 +349,7 @@ return function(Window)
     CombatTab:CreateButton({
         Name = "Убить всех (Kill All)",
         Callback = function()
-            if isKillingAll then return end
+            if isKillingAll or isKillingSheriff or isKillingTarget then return end
             
             local char = LocalPlayer.Character
             if not char then return end
@@ -356,7 +357,6 @@ return function(Window)
             local backpack = LocalPlayer:FindFirstChild("Backpack")
             local knife = char:FindFirstChild("Knife") or (backpack and backpack:FindFirstChild("Knife"))
             
-            -- Проверка наличия ножа у игрока
             if not knife then
                 pcall(function()
                     game:GetService("StarterGui"):SetCore("SendNotification", {
@@ -370,7 +370,6 @@ return function(Window)
             
             isKillingAll = true
             
-            -- Экипируем нож, если он лежит в рюкзаке
             if knife.Parent == backpack then
                 local humanoid = char:FindFirstChildOfClass("Humanoid")
                 if humanoid then
@@ -378,7 +377,6 @@ return function(Window)
                 end
             end
             
-            -- Сохраняем исходные координаты всех живых игроков
             local originalCFrames = {}
             for _, player in ipairs(Players:GetPlayers()) do
                 if player ~= LocalPlayer and player.Character then
@@ -396,11 +394,9 @@ return function(Window)
             killConnection = RunService.RenderStepped:Connect(function()
                 local myRoot = char:FindFirstChild("HumanoidRootPart")
                 
-                -- Выход из цикла: прошло 4 секунды, игрок погиб, либо пропал нож
                 if not myRoot or os.clock() - startTime >= 4 or not char:FindFirstChild("Knife") then
                     killConnection:Disconnect()
                     
-                    -- Сбрасываем и возвращаем выживших игроков на их исходные серверные координаты
                     for player, cframe in pairs(originalCFrames) do
                         if player.Character then
                             local root = player.Character:FindFirstChild("HumanoidRootPart")
@@ -413,10 +409,8 @@ return function(Window)
                     return
                 end
                 
-                -- Координаты точки прямо перед Мардером (дистанция 2 стада)
                 local targetCFrame = myRoot.CFrame * CFrame.new(0, 0, -2)
                 
-                -- Каждый кадр стягиваем всех к себе локально
                 for _, player in ipairs(Players:GetPlayers()) do
                     if player ~= LocalPlayer and player.Character then
                         local root = player.Character:FindFirstChild("HumanoidRootPart")
@@ -427,7 +421,195 @@ return function(Window)
                     end
                 end
                 
-                -- Авто-атака ножом
+                if knife and knife.Parent == char then
+                    knife:Activate()
+                end
+            end)
+        end
+    })
+
+    CombatTab:CreateButton({
+        Name = "Убить Шерифа (Kill Sheriff)",
+        Callback = function()
+            if isKillingAll or isKillingSheriff or isKillingTarget then return end
+
+            local char = LocalPlayer.Character
+            if not char then return end
+
+            local backpack = LocalPlayer:FindFirstChild("Backpack")
+            local knife = char:FindFirstChild("Knife") or (backpack and backpack:FindFirstChild("Knife"))
+
+            if not knife then
+                pcall(function()
+                    game:GetService("StarterGui"):SetCore("SendNotification", {
+                        Title = "MM2 Exploit",
+                        Text = "Вы не Мардер!",
+                        Duration = 4
+                    })
+                end)
+                return
+            end
+
+            -- Сканируем и ищем активного игрока с пистолетом
+            local targetSheriff = nil
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character then
+                    local hasGun = player.Character:FindFirstChild("Gun") or (player:FindFirstChild("Backpack") and player.Backpack:FindFirstChild("Gun"))
+                    if hasGun then
+                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health > 0 then
+                            targetSheriff = player
+                            break
+                        end
+                    end
+                end
+            end
+
+            if not targetSheriff then
+                pcall(function()
+                    game:GetService("StarterGui"):SetCore("SendNotification", {
+                        Title = "MM2 Exploit",
+                        Text = "Шериф не найден или мертв!",
+                        Duration = 4
+                    })
+                end)
+                return
+            end
+
+            isKillingSheriff = true
+
+            if knife.Parent == backpack then
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
+                if humanoid then humanoid:EquipTool(knife) end
+            end
+
+            local originalCFrame = nil
+            local sRoot = targetSheriff.Character:FindFirstChild("HumanoidRootPart")
+            if sRoot then originalCFrame = sRoot.CFrame end
+
+            local startTime = os.clock()
+            local sheriffKillConnection
+
+            sheriffKillConnection = RunService.RenderStepped:Connect(function()
+                local myRoot = char:FindFirstChild("HumanoidRootPart")
+                local sChar = targetSheriff.Character
+                local curSRoot = sChar and sChar:FindFirstChild("HumanoidRootPart")
+                local sHum = sChar and sChar:FindFirstChildOfClass("Humanoid")
+
+                if not myRoot or os.clock() - startTime >= 4 or not curSRoot or not sHum or sHum.Health <= 0 or not char:FindFirstChild("Knife") then
+                    sheriffKillConnection:Disconnect()
+                    if curSRoot and originalCFrame then
+                        curSRoot.CFrame = originalCFrame
+                    end
+                    isKillingSheriff = false
+                    return
+                end
+
+                -- Стягиваем Шерифа локально под лезвие
+                curSRoot.CFrame = myRoot.CFrame * CFrame.new(0, 0, -2)
+
+                if knife and knife.Parent == char then
+                    knife:Activate()
+                end
+            end)
+        end
+    })
+
+    -- Выпадающий список для выбора конкретного игрока
+    local PlayerDropdown = CombatTab:CreateDropdown({
+        Name = "Выбрать игрока для убийства",
+        Options = {},
+        CurrentValue = "",
+        Flag = "KillTargetDropdown",
+        Callback = function(Value)
+            SelectedPlayerName = Value
+        end
+    })
+
+    -- Асинхронный поток для автообновления списка игроков раз в 2 секунды
+    task.spawn(function()
+        while task.wait(2) do
+            local playerNames = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer then
+                    table.insert(playerNames, p.Name)
+                end
+            end
+            pcall(function()
+                PlayerDropdown:Refresh(playerNames, true)
+            end)
+        end
+    end)
+
+    CombatTab:CreateButton({
+        Name = "Убить выбранного игрока",
+        Callback = function()
+            if isKillingAll or isKillingSheriff or isKillingTarget or SelectedPlayerName == "" then return end
+
+            local char = LocalPlayer.Character
+            if not char then return end
+
+            local backpack = LocalPlayer:FindFirstChild("Backpack")
+            local knife = char:FindFirstChild("Knife") or (backpack and backpack:FindFirstChild("Knife"))
+
+            if not knife then
+                pcall(function()
+                    game:GetService("StarterGui"):SetCore("SendNotification", {
+                        Title = "MM2 Exploit",
+                        Text = "Вы не Мардер!",
+                        Duration = 4
+                    })
+                end)
+                return
+            end
+
+            local targetPlayer = Players:FindFirstChild(SelectedPlayerName)
+            if not targetPlayer or not targetPlayer.Character then
+                pcall(function()
+                    game:GetService("StarterGui"):SetCore("SendNotification", {
+                        Title = "MM2 Exploit",
+                        Text = "Цель покинула сервер или не найдена!",
+                        Duration = 4
+                    })
+                end)
+                return
+            end
+
+            local tHum = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if not tHum or tHum.Health <= 0 then return end
+
+            isKillingTarget = true
+
+            if knife.Parent == backpack then
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
+                if humanoid then humanoid:EquipTool(knife) end
+            end
+
+            local originalCFrame = nil
+            local tRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if tRoot then originalCFrame = tRoot.CFrame end
+
+            local startTime = os.clock()
+            local targetKillConnection
+
+            targetKillConnection = RunService.RenderStepped:Connect(function()
+                local myRoot = char:FindFirstChild("HumanoidRootPart")
+                local tChar = targetPlayer.Character
+                local curTRoot = tChar and tChar:FindFirstChild("HumanoidRootPart")
+                local currentTHum = tChar and tChar:FindFirstChildOfClass("Humanoid")
+
+                if not myRoot or os.clock() - startTime >= 4 or not curTRoot or not currentTHum or currentTHum.Health <= 0 or not char:FindFirstChild("Knife") then
+                    targetKillConnection:Disconnect()
+                    if curTRoot and originalCFrame then
+                        curTRoot.CFrame = originalCFrame
+                    end
+                    isKillingTarget = false
+                    return
+                end
+
+                -- Стягиваем цель прямо к ножу
+                curTRoot.CFrame = myRoot.CFrame * CFrame.new(0, 0, -2)
+
                 if knife and knife.Parent == char then
                     knife:Activate()
                 end
