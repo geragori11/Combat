@@ -147,52 +147,73 @@ return function(Window)
     --    target = сам хитбокс Мардера.
     -- ==========================================
     local function fireBulletAtTarget(targetCharacter, gun)
-        if not targetCharacter or not gun then return end
+    if not targetCharacter or not gun then return end
 
-        -- Собираем все крупные BasePart жертвы (без аксессуаров)
-        local bodyParts = {}
-        local priorityNames = {
-            "Head", "UpperTorso", "Torso", "LowerTorso",
-            "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
-            "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg"
-        }
+    local mRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
+    if not mRoot then return end
 
-        for _, name in ipairs(priorityNames) do
-            local part = targetCharacter:FindFirstChild(name)
-            if part and part:IsA("BasePart") then
-                table.insert(bodyParts, part)
-            end
-        end
+    local velocity = mRoot.AssemblyLinearVelocity
+    local speed = velocity.Magnitude
 
-        -- Fallback: если R6/R15 различается — берём всё BasePart
-        if #bodyParts == 0 then
-            for _, d in ipairs(targetCharacter:GetDescendants()) do
-                if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
-                    table.insert(bodyParts, d)
-                end
-            end
-        end
+    -- Пинг для предсказания положения цели
+    local ping = 0
+    pcall(function() ping = LocalPlayer:GetNetworkPing() end)
+    ping = math.clamp(ping, 0, 0.5)
 
-        if #bodyParts == 0 then return end
-
-        local mRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
-        if not mRoot then return end
-
-        for _, part in ipairs(bodyParts) do
-            -- Origin: рядом с жертвой, чуть впереди её взгляда.
-            -- Это гарантирует, что у сервера «снаряд» уже рядом с хитбоксом.
-            local originCFrame = CFrame.new(part.Position + mRoot.CFrame.LookVector * 3)
-            local targetCFrame = CFrame.new(part.Position)
-
-            pcall(function()
-                if gun:FindFirstChild("Shoot") then
-                    gun.Shoot:FireServer(originCFrame, targetCFrame)
-                end
-            end)
-
-            task.wait(0.03)
+    -- Собираем все крупные BasePart жертвы
+    local bodyParts = {}
+    local priorityNames = {
+        "Head", "UpperTorso", "Torso", "LowerTorso",
+        "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
+        "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg"
+    }
+    for _, name in ipairs(priorityNames) do
+        local part = targetCharacter:FindFirstChild(name)
+        if part and part:IsA("BasePart") then
+            table.insert(bodyParts, part)
         end
     end
+    if #bodyParts == 0 then
+        for _, d in ipairs(targetCharacter:GetDescendants()) do
+            if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+                table.insert(bodyParts, d)
+            end
+        end
+    end
+    if #bodyParts == 0 then return end
+
+    -- НАПРАВЛЕНИЕ СПАВНА ПУЛИ:
+    --   Бежит (speed > 3)  -> спавним С ПРОТИВОПОЛОЖНОЙ СТОРОНЫ от движения (сзади).
+    --                         Траектория летит вдоль его вектора -> попадание всегда.
+    --   Стоит               -> по его взгляду (LookVector), как было раньше.
+    local spawnDir
+    if speed > 3 then
+        spawnDir = -velocity.Unit   -- противоположно движению = позади него
+    else
+        spawnDir = mRoot.CFrame.LookVector
+    end
+
+    -- Чем быстрее бежит — тем БЛИЖЕ спавним к телу (чтобы пуля не улетела "в молоко")
+    local spawnDist = math.clamp(2 - speed * 0.02, 0.4, 2)
+
+    for _, part in ipairs(bodyParts) do
+        -- Предсказанная позиция хитбокса с учётом пинга
+        local predictedPos = part.Position + velocity * ping
+
+        -- Origin с противоположной стороны движения (или спереди взгляда, если стоит)
+        local originPos = predictedPos + spawnDir * spawnDist
+
+        local originCFrame = CFrame.new(originPos)
+        local targetCFrame = CFrame.new(predictedPos)
+
+        pcall(function()
+            if gun:FindFirstChild("Shoot") then
+                gun.Shoot:FireServer(originCFrame, targetCFrame)
+            end
+        end)
+        task.wait(0.02)
+    end
+end
 
     -- ==========================================
     -- СОЗДАНИЕ ЭЛЕМЕНТОВ ИНТЕРФЕЙСА
