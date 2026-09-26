@@ -1,8 +1,5 @@
 -- =========================================================================
--- Murder Mystery 2: Auto-Shoot (Автовыстрел по Мардеру) + UI Wrapper
--- Все аимботы удалены (Silent Aim, Hitbox Assistant, Trigger Bot, HvH Snap Aim).
--- Оставлен один автовыстрел с динамическим упреждением (дистанция + пинг).
--- Также: Kill All, Kill Sheriff, Kill Target Player (с выбором из Dropdown).
+-- Murder Mystery 2: Auto-Shoot + Murderer Exploits (Bullet-at-hitbox)
 -- =========================================================================
 
 return function(Window)
@@ -17,14 +14,13 @@ return function(Window)
     local AutoShootEnabled = false
     local AutoShootEquip = true
     local IsShooting = false
-    local shootOffset = 2.1          -- Упреждение по умолчанию
-    local offsetToPingMult = 1       -- Множитель пинга
-    local referenceDistance = 30     -- Эталонная дистанция, для которой shootOffset работает идеально
-    local shootCooldown = 1.5        -- Задержка между выстрелами (сек)
+    local shootOffset = 2.1
+    local offsetToPingMult = 1
+    local referenceDistance = 30
+    local shootCooldown = 1.5
 
     -- --- СОСТОЯНИЕ EXPLOITS ---
     local isKillingAll = false
-    local isKillingMurderer = false
     local isKillingSheriff = false
     local isKillingTarget = false
     local SelectedPlayerName = ""
@@ -40,7 +36,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 1. ПОИСК УБИЙЦЫ (Knife в руках или в Backpack)
+    -- 1. ПОИСК УБИЙЦЫ
     -- ==========================================
     local function findMurderer()
         for _, player in ipairs(Players:GetPlayers()) do
@@ -48,7 +44,8 @@ return function(Window)
                 local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
                 if humanoid and humanoid.Health > 0 then
                     local backpack = player:FindFirstChild("Backpack")
-                    if player.Character:FindFirstChild("Knife") or (backpack and backpack:FindFirstChild("Knife")) then
+                    if player.Character:FindFirstChild("Knife")
+                        or (backpack and backpack:FindFirstChild("Knife")) then
                         return player
                     end
                 end
@@ -58,7 +55,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 2. ДИНАМИЧЕСКОЕ УПРЕЖДЕНИЕ (Дистанция + Относительная скорость + Пинг)
+    -- 2. ДИНАМИЧЕСКОЕ УПРЕЖДЕНИЕ
     -- ==========================================
     local function getPredictedPosition(targetPart, myChar, baseOffset)
         if not targetPart or not myChar then return Vector3.new(0, 0, 0) end
@@ -66,39 +63,31 @@ return function(Window)
         local originPart = myChar:FindFirstChild("RightHand")
         if not originPart then return targetPart.Position end
 
-        -- Надежнее всего брать скорость с HumanoidRootPart, так как анимации искажают скорость конечностей
         local targetHRP = targetPart.Parent and targetPart.Parent:FindFirstChild("HumanoidRootPart")
         local targetVelocity = targetHRP and targetHRP.AssemblyLinearVelocity or targetPart.AssemblyLinearVelocity
 
         local myHRP = myChar:FindFirstChild("HumanoidRootPart")
         local myVelocity = myHRP and myHRP.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
 
-        -- Дистанция до цели
         local distance = (targetPart.Position - originPart.Position).Magnitude
-
-        -- Множитель дистанции: чем дальше враг, тем дольше летит пуля -> нужно большее упреждение
         local distanceMultiplier = distance / referenceDistance
 
-        -- Относительная скорость (ваша скорость по отношению к скорости врага)
         local relativeVelocity = targetVelocity - myVelocity
         local directionToTarget = (targetPart.Position - originPart.Position).Unit
         local closingSpeed = relativeVelocity:Dot(directionToTarget)
         local timeAdjust = 1 + (closingSpeed / 150)
 
-        -- Итоговый расчет времени полета снаряда до цели
         local predictionTime = (baseOffset / 16) * distanceMultiplier * timeAdjust
 
-        -- Добавляем пинг
         local pingInSeconds = 0
         pcall(function() pingInSeconds = LocalPlayer:GetNetworkPing() end)
         local totalPredictionTime = math.max(0, predictionTime + pingInSeconds * offsetToPingMult)
 
-        -- Итоговая позиция: Текущая позиция + (Скорость врага * Итоговое время предсказания)
         return targetPart.Position + (targetVelocity * totalPredictionTime)
     end
 
     -- ==========================================
-    -- 3. ПРОВЕРКА ВИДИМОСТИ КАЖДОЙ ЧАСТИ ТЕЛА (Raycast)
+    -- 3. ПРОВЕРКА ВИДИМОСТИ ЧАСТИ ТЕЛА
     -- ==========================================
     local function getVisiblePart(targetCharacter)
         local myChar = LocalPlayer.Character
@@ -107,27 +96,106 @@ return function(Window)
         local origin = myChar.RightHand.Position
 
         local raycastParams = RaycastParams.new()
-        raycastParams.FilterDescendantsInstances = {myChar} -- Игнорируем себя
+        raycastParams.FilterDescendantsInstances = { myChar }
         raycastParams.FilterType = Enum.RaycastFilterType.Exclude
         raycastParams.IgnoreWater = true
 
         for _, part in ipairs(targetCharacter:GetDescendants()) do
-            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and part.Transparency < 1 then
+            if part:IsA("BasePart")
+                and part.Name ~= "HumanoidRootPart"
+                and part.Transparency < 1
+            then
                 local targetPos = part.Position
                 local direction = (targetPos - origin).Unit * ((targetPos - origin).Magnitude + 2)
                 local result = workspace:Raycast(origin, direction, raycastParams)
 
-                if result and result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
+                if result and result.Instance
+                    and result.Instance:IsDescendantOf(targetCharacter)
+                then
                     return part
                 end
             end
         end
-
         return nil
     end
 
     -- ==========================================
-    -- СОЗДАНИЕ ЭЛЕМЕНТОВ ИНТЕРФЕЙСА (UI)
+    -- 4. ХЕЛПЕР: ЭКИПИРОВКА ПИСТОЛЕТА
+    -- ==========================================
+    local function getEquippedGun()
+        local char = LocalPlayer.Character
+        if not char then return nil end
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+
+        local gun = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver")
+        if gun then return gun end
+
+        local bagGun = backpack and (backpack:FindFirstChild("Gun") or backpack:FindFirstChild("Revolver"))
+        if bagGun and AutoShootEquip then
+            local humanoid = char:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid:EquipTool(bagGun)
+                return bagGun
+            end
+        end
+        return nil
+    end
+
+    -- ==========================================
+    -- 5. BULLET-AT-HITBOX: пуля рождается у Мардера
+    --    origin = позиция рядом с Мардером (в его направлении),
+    --    target = сам хитбокс Мардера.
+    -- ==========================================
+    local function fireBulletAtTarget(targetCharacter, gun)
+        if not targetCharacter or not gun then return end
+
+        -- Собираем все крупные BasePart жертвы (без аксессуаров)
+        local bodyParts = {}
+        local priorityNames = {
+            "Head", "UpperTorso", "Torso", "LowerTorso",
+            "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
+            "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg"
+        }
+
+        for _, name in ipairs(priorityNames) do
+            local part = targetCharacter:FindFirstChild(name)
+            if part and part:IsA("BasePart") then
+                table.insert(bodyParts, part)
+            end
+        end
+
+        -- Fallback: если R6/R15 различается — берём всё BasePart
+        if #bodyParts == 0 then
+            for _, d in ipairs(targetCharacter:GetDescendants()) do
+                if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+                    table.insert(bodyParts, d)
+                end
+            end
+        end
+
+        if #bodyParts == 0 then return end
+
+        local mRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
+        if not mRoot then return end
+
+        for _, part in ipairs(bodyParts) do
+            -- Origin: рядом с жертвой, чуть впереди её взгляда.
+            -- Это гарантирует, что у сервера «снаряд» уже рядом с хитбоксом.
+            local originCFrame = CFrame.new(part.Position + mRoot.CFrame.LookVector * 3)
+            local targetCFrame = CFrame.new(part.Position)
+
+            pcall(function()
+                if gun:FindFirstChild("Shoot") then
+                    gun.Shoot:FireServer(originCFrame, targetCFrame)
+                end
+            end)
+
+            task.wait(0.03)
+        end
+    end
+
+    -- ==========================================
+    -- СОЗДАНИЕ ЭЛЕМЕНТОВ ИНТЕРФЕЙСА
     -- ==========================================
     CombatTab:CreateSection("Auto-Shoot (Автовыстрел по Мардеру)")
 
@@ -154,36 +222,28 @@ return function(Window)
 
     CombatTab:CreateSlider({
         Name = "Упреждение (Shoot Offset)",
-        Range = {0, 10},
-        Increment = 0.1,
-        CurrentValue = 2.1,
+        Range = {0, 10}, Increment = 0.1, CurrentValue = 2.1,
         Flag = "AutoShootOffset",
         Callback = function(Value) shootOffset = Value end
     })
 
     CombatTab:CreateSlider({
         Name = "Множитель пинга",
-        Range = {0, 5},
-        Increment = 0.1,
-        CurrentValue = 1,
+        Range = {0, 5}, Increment = 0.1, CurrentValue = 1,
         Flag = "AutoShootPingMult",
         Callback = function(Value) offsetToPingMult = Value end
     })
 
     CombatTab:CreateSlider({
         Name = "Эталонная дистанция (studs)",
-        Range = {5, 100},
-        Increment = 1,
-        CurrentValue = 30,
+        Range = {5, 100}, Increment = 1, CurrentValue = 30,
         Flag = "AutoShootRefDistance",
         Callback = function(Value) referenceDistance = Value end
     })
 
     CombatTab:CreateSlider({
         Name = "Задержка между выстрелами (сек)",
-        Range = {0.1, 5},
-        Increment = 0.1,
-        CurrentValue = 1.5,
+        Range = {0.1, 5}, Increment = 0.1, CurrentValue = 1.5,
         Flag = "AutoShootCooldown",
         Callback = function(Value) shootCooldown = Value end
     })
@@ -195,40 +255,34 @@ return function(Window)
         Callback = function(Value) AutoShootEquip = Value end
     })
 
-    -- --- РАЗДЕЛ: ЭКСПЛОЙТЫ ДЛЯ МАРДЕРА ---
+    -- ==========================================
+    -- MURDERER EXPLOITS
+    -- ==========================================
     CombatTab:CreateSection("Murderer Exploits")
 
     CombatTab:CreateButton({
         Name = "Убить всех (Kill All)",
         Callback = function()
             if isKillingAll or isKillingSheriff or isKillingTarget then return end
-            
+
             local char = LocalPlayer.Character
             if not char then return end
-            
+
             local backpack = LocalPlayer:FindFirstChild("Backpack")
             local knife = char:FindFirstChild("Knife") or (backpack and backpack:FindFirstChild("Knife"))
-            
+
             if not knife then
-                pcall(function()
-                    game:GetService("StarterGui"):SetCore("SendNotification", {
-                        Title = "MM2 Exploit",
-                        Text = "Вы не Мардер!",
-                        Duration = 4
-                    })
-                end)
+                Notify("MM2 Exploit", "Вы не Мардер!")
                 return
             end
-            
+
             isKillingAll = true
-            
+
             if knife.Parent == backpack then
                 local humanoid = char:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    humanoid:EquipTool(knife)
-                end
+                if humanoid then humanoid:EquipTool(knife) end
             end
-            
+
             local originalCFrames = {}
             for _, player in ipairs(Players:GetPlayers()) do
                 if player ~= LocalPlayer and player.Character then
@@ -239,30 +293,27 @@ return function(Window)
                     end
                 end
             end
-            
+
             local startTime = os.clock()
             local killConnection
-            
+
             killConnection = RunService.RenderStepped:Connect(function()
                 local myRoot = char:FindFirstChild("HumanoidRootPart")
-                
+
                 if not myRoot or os.clock() - startTime >= 4 or not char:FindFirstChild("Knife") then
                     killConnection:Disconnect()
-                    
                     for player, cframe in pairs(originalCFrames) do
                         if player.Character then
                             local root = player.Character:FindFirstChild("HumanoidRootPart")
-                            if root then
-                                root.CFrame = cframe
-                            end
+                            if root then root.CFrame = cframe end
                         end
                     end
                     isKillingAll = false
                     return
                 end
-                
+
                 local targetCFrame = myRoot.CFrame * CFrame.new(0, 0, -2)
-                
+
                 for _, player in ipairs(Players:GetPlayers()) do
                     if player ~= LocalPlayer and player.Character then
                         local root = player.Character:FindFirstChild("HumanoidRootPart")
@@ -272,7 +323,7 @@ return function(Window)
                         end
                     end
                 end
-                
+
                 if knife and knife.Parent == char then
                     knife:Activate()
                 end
@@ -292,21 +343,15 @@ return function(Window)
             local knife = char:FindFirstChild("Knife") or (backpack and backpack:FindFirstChild("Knife"))
 
             if not knife then
-                pcall(function()
-                    game:GetService("StarterGui"):SetCore("SendNotification", {
-                        Title = "MM2 Exploit",
-                        Text = "Вы не Мардер!",
-                        Duration = 4
-                    })
-                end)
+                Notify("MM2 Exploit", "Вы не Мардер!")
                 return
             end
 
-            -- Сканируем и ищем активного игрока с пистолетом
             local targetSheriff = nil
             for _, player in ipairs(Players:GetPlayers()) do
                 if player ~= LocalPlayer and player.Character then
-                    local hasGun = player.Character:FindFirstChild("Gun") or (player:FindFirstChild("Backpack") and player.Backpack:FindFirstChild("Gun"))
+                    local hasGun = player.Character:FindFirstChild("Gun")
+                        or (player:FindFirstChild("Backpack") and player.Backpack:FindFirstChild("Gun"))
                     if hasGun then
                         local hum = player.Character:FindFirstChildOfClass("Humanoid")
                         if hum and hum.Health > 0 then
@@ -318,13 +363,7 @@ return function(Window)
             end
 
             if not targetSheriff then
-                pcall(function()
-                    game:GetService("StarterGui"):SetCore("SendNotification", {
-                        Title = "MM2 Exploit",
-                        Text = "Шериф не найден или мертв!",
-                        Duration = 4
-                    })
-                end)
+                Notify("MM2 Exploit", "Шериф не найден или мертв!")
                 return
             end
 
@@ -348,7 +387,10 @@ return function(Window)
                 local curSRoot = sChar and sChar:FindFirstChild("HumanoidRootPart")
                 local sHum = sChar and sChar:FindFirstChildOfClass("Humanoid")
 
-                if not myRoot or os.clock() - startTime >= 4 or not curSRoot or not sHum or sHum.Health <= 0 or not char:FindFirstChild("Knife") then
+                if not myRoot or os.clock() - startTime >= 4
+                    or not curSRoot or not sHum or sHum.Health <= 0
+                    or not char:FindFirstChild("Knife")
+                then
                     sheriffKillConnection:Disconnect()
                     if curSRoot and originalCFrame then
                         curSRoot.CFrame = originalCFrame
@@ -357,7 +399,6 @@ return function(Window)
                     return
                 end
 
-                -- Стягиваем Шерифа локально под лезвие
                 curSRoot.CFrame = myRoot.CFrame * CFrame.new(0, 0, -2)
 
                 if knife and knife.Parent == char then
@@ -367,20 +408,17 @@ return function(Window)
         end
     })
 
-    -- Выпадающий список для выбора конкретного игрока
     local PlayerDropdown = CombatTab:CreateDropdown({
         Name = "Выбрать игрока для убийства",
         Options = {},
         CurrentOption = {},
         Flag = "KillTargetDropdown",
         Callback = function(Value)
-            -- Rayfield передает таблицу выбранных опций (а не строку)
             if type(Value) == "table" then Value = Value[1] end
             SelectedPlayerName = Value or ""
         end
     })
 
-    -- Асинхронный поток для автообновления списка игроков раз в 2 секунды
     task.spawn(function()
         while task.wait(2) do
             local playerNames = {}
@@ -407,25 +445,13 @@ return function(Window)
             local knife = char:FindFirstChild("Knife") or (backpack and backpack:FindFirstChild("Knife"))
 
             if not knife then
-                pcall(function()
-                    game:GetService("StarterGui"):SetCore("SendNotification", {
-                        Title = "MM2 Exploit",
-                        Text = "Вы не Мардер!",
-                        Duration = 4
-                    })
-                end)
+                Notify("MM2 Exploit", "Вы не Мардер!")
                 return
             end
 
             local targetPlayer = Players:FindFirstChild(SelectedPlayerName)
             if not targetPlayer or not targetPlayer.Character then
-                pcall(function()
-                    game:GetService("StarterGui"):SetCore("SendNotification", {
-                        Title = "MM2 Exploit",
-                        Text = "Цель покинула сервер или не найдена!",
-                        Duration = 4
-                    })
-                end)
+                Notify("MM2 Exploit", "Цель покинула сервер или не найдена!")
                 return
             end
 
@@ -452,7 +478,10 @@ return function(Window)
                 local curTRoot = tChar and tChar:FindFirstChild("HumanoidRootPart")
                 local currentTHum = tChar and tChar:FindFirstChildOfClass("Humanoid")
 
-                if not myRoot or os.clock() - startTime >= 4 or not curTRoot or not currentTHum or currentTHum.Health <= 0 or not char:FindFirstChild("Knife") then
+                if not myRoot or os.clock() - startTime >= 4
+                    or not curTRoot or not currentTHum or currentTHum.Health <= 0
+                    or not char:FindFirstChild("Knife")
+                then
                     targetKillConnection:Disconnect()
                     if curTRoot and originalCFrame then
                         curTRoot.CFrame = originalCFrame
@@ -461,7 +490,6 @@ return function(Window)
                     return
                 end
 
-                -- Стягиваем цель прямо к ножу
                 curTRoot.CFrame = myRoot.CFrame * CFrame.new(0, 0, -2)
 
                 if knife and knife.Parent == char then
@@ -471,104 +499,62 @@ return function(Window)
         end
     })
 
-    -- --- РАЗДЕЛ: ЭКСПЛОЙТЫ ДЛЯ ШЕРИФА ---
+    -- ==========================================
+    -- SHERIFF EXPLOITS
+    -- ==========================================
     CombatTab:CreateSection("Sheriff Exploits")
 
     CombatTab:CreateButton({
-        Name = "Убить Мардера (Kill Murderer)",
+        Name = "Убить Мардера (пуля в хитбокс)",
         Callback = function()
-            if isKillingMurderer then return end
-
             local char = LocalPlayer.Character
             if not char then return end
 
             local backpack = LocalPlayer:FindFirstChild("Backpack")
-            local gun = char:FindFirstChild("Gun") or (backpack and backpack:FindFirstChild("Gun"))
+            local gun = char:FindFirstChild("Gun")
+                or char:FindFirstChild("Revolver")
+                or (backpack and (backpack:FindFirstChild("Gun") or backpack:FindFirstChild("Revolver")))
 
-            -- 1. Проверка наличия пистолета (роли Шерифа/Героя)
             if not gun then
-                pcall(function()
-                    game:GetService("StarterGui"):SetCore("SendNotification", {
-                        Title = "MM2 Exploit",
-                        Text = "Вы не Шериф (нет пистолета)!",
-                        Duration = 4
-                    })
-                end)
+                Notify("MM2 Exploit", "Вы не Шериф (нет пистолета)!")
                 return
             end
 
-            -- 2. Поиск активного Мардера
-            local targetMurderer = nil
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer and player.Character then
-                    local hasKnife = player.Character:FindFirstChild("Knife") or (player:FindFirstChild("Backpack") and player.Backpack:FindFirstChild("Knife"))
-                    if hasKnife then
-                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
-                        if hum and hum.Health > 0 then
-                            targetMurderer = player
-                            break
-                        end
-                    end
-                end
-            end
-
-            if not targetMurderer then
-                pcall(function()
-                    game:GetService("StarterGui"):SetCore("SendNotification", {
-                        Title = "MM2 Exploit",
-                        Text = "Мардер не найден или мертв!",
-                        Duration = 4
-                    })
-                end)
-                return
-            end
-
-            isKillingMurderer = true
-
-            -- Экипируем пистолет, если он лежит в инвентаре
+            -- Экипируем пистолет, если он в рюкзаке
             if gun.Parent == backpack then
-                local humanoid = char:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    humanoid:EquipTool(gun)
-                end
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then hum:EquipTool(gun) end
+                task.wait(0.15)
+                gun = char:FindFirstChild("Gun")
+                    or char:FindFirstChild("Revolver")
+                    or gun
             end
 
-            -- Запоминаем оригинальную позицию Мардера перед телепортом
-            local originalCFrame = nil
-            local mRoot = targetMurderer.Character:FindFirstChild("HumanoidRootPart")
-            if mRoot then
-                originalCFrame = mRoot.CFrame
+            local murderer = findMurderer()
+            if not murderer or not murderer.Character then
+                Notify("MM2 Exploit", "Мардер не найден или мертв!")
+                return
             end
 
-            local startTime = os.clock()
-            local sheriffConnection
+            -- Основной выстрел: origin у хитбокса, target в хитбокс
+            fireBulletAtTarget(murderer.Character, gun)
 
-            sheriffConnection = RunService.RenderStepped:Connect(function()
-                local myRoot = char:FindFirstChild("HumanoidRootPart")
-                local mChar = targetMurderer.Character
-                local curMRoot = mChar and mChar:FindFirstChild("HumanoidRootPart")
-                local mHum = mChar and mChar:FindFirstChildOfClass("Humanoid")
-
-                -- Прерывание: вышло время, мардер мертв, шериф мертв или убрал пистолет
-                if not myRoot or os.clock() - startTime >= 4 or not curMRoot or not mHum or mHum.Health <= 0 or not char:FindFirstChild("Gun") then
-                    sheriffConnection:Disconnect()
-                    
-                    -- Возвращаем Мардера на его реальную позицию
-                    if curMRoot and originalCFrame then
-                        curMRoot.CFrame = originalCFrame
+            -- Контрольный выстрел чуть позже (на случай лага сервера)
+            task.delay(0.15, function()
+                local mChar = murderer.Character
+                if mChar then
+                    local hum = mChar:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        local g2 = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver") or gun
+                        fireBulletAtTarget(mChar, g2)
                     end
-                    isKillingMurderer = false
-                    return
                 end
-
-                -- Локально стягиваем Мардера прямо под прицел (на расстояние 4 студа лицом к тебе)
-                curMRoot.CFrame = myRoot.CFrame * CFrame.new(0, 0, -4)
             end)
         end
     })
 
     -- ==========================================
-    -- ЕДИНЫЙ ЦИКЛ АВТОВЫСТРЕЛА (HEARTBEAT)
+    -- ЕДИНЫЙ ЦИКЛ АВТОВЫСТРЕЛА
     -- ==========================================
     RunService.Heartbeat:Connect(function()
         if not AutoShootEnabled or IsShooting then return end
@@ -582,27 +568,14 @@ return function(Window)
         local humanoid = char:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then return end
 
-        local backpack = LocalPlayer:FindFirstChild("Backpack")
-        local gun = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver")
+        local gun = getEquippedGun()
+        if not gun then return end
 
-        -- Авто-экипировка: достаем пистолет из инвентаря
-        if not gun then
-            local bagGun = backpack and (backpack:FindFirstChild("Gun") or backpack:FindFirstChild("Revolver"))
-            if bagGun and AutoShootEquip then
-                humanoid:EquipTool(bagGun)
-                gun = bagGun
-            else
-                return
-            end
-        end
-
-        -- Стреляем только если видим хотя бы одну часть тела
         local visiblePart = getVisiblePart(murderer.Character)
         if not visiblePart then return end
 
         IsShooting = true
 
-        -- Передаем персонажа для считывания вашей позиции и скорости
         local predictedPosition = getPredictedPosition(visiblePart, char, shootOffset)
 
         local args = {
