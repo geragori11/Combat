@@ -1,5 +1,5 @@
 -- =========================================================================
--- Murder Mystery 2: Auto-Shoot + Murderer/Sheriff Exploits
+-- Murder Mystery 2: Auto-Shoot + HvH Mode + Murderer/Sheriff Exploits
 -- + Remote Kill Spoof + Kill All Except Sheriff + Knife Aura
 -- =========================================================================
 
@@ -19,6 +19,11 @@ return function(Window)
     local offsetToPingMult = 1
     local referenceDistance = 30
     local shootCooldown = 1.5
+
+    -- --- НАСТРОЙКИ HvH РЕЖИМА ---
+    local HvHMode = false            -- включён ли HvH в авто-выстреле
+    local HvHMaxDistance = 50        -- макс. дистанция для HvH (анти-палево)
+    local HvHRequireVisible = true   -- стрелять только по видимым частям
 
     -- --- НАСТРОЙКИ KNIFE AURA ---
     local KnifeAuraEnabled = false
@@ -70,7 +75,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 2. УПРЕЖДЕНИЕ (для авто-выстрела)
+    -- 2. УПРЕЖДЕНИЕ (для обычного авто-выстрела)
     -- ==========================================
     local function getPredictedPosition(targetPart, myChar, baseOffset)
         if not targetPart or not myChar then return Vector3.new(0, 0, 0) end
@@ -173,18 +178,16 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 5. REMOTE KILL SPOOF
-    --    Клиент сам говорит серверу, что ударил ножом
-    --    по чужой части тела. Жертву НЕ телепортируем.
+    -- 5. REMOTE KILL SPOOF (быстрый, без task.wait)
     -- ==========================================
-    local function spoofKill(targetPlayer)
+    local function spoofKill(targetPlayer, knife)
         if not targetPlayer or not targetPlayer.Character then return false end
 
         local victimChar = targetPlayer.Character
         local victimHum = victimChar:FindFirstChildOfClass("Humanoid")
         if not victimHum or victimHum.Health <= 0 then return false end
 
-        local knife = getEquippedKnife()
+        knife = knife or getEquippedKnife()
         if not knife then return false end
 
         local events = knife:FindFirstChild("Events")
@@ -194,12 +197,10 @@ return function(Window)
         local handleTouched = events:FindFirstChild("HandleTouched")
         if not handleTouched then return false end
 
-        -- 1) Помечаем на сервере, что мы "недавно ударили ножом"
         if knifeStabbed then
             pcall(function() knifeStabbed:FireServer() end)
         end
 
-        -- 2) Говорим серверу, что рукоять коснулась частей жертвы
         local parts = {}
         for _, name in ipairs({"Head", "UpperTorso", "Torso", "LowerTorso",
                                "LeftUpperArm", "RightUpperArm", "LeftUpperLeg", "RightUpperLeg"}) do
@@ -219,6 +220,20 @@ return function(Window)
         end
 
         return true
+    end
+
+    local function spoofKillBurst(targetList)
+        local knife = getEquippedKnife()
+        if not knife then return 0 end
+
+        for _, player in ipairs(targetList) do
+            task.spawn(function()
+                task.wait(math.random() * 0.01)
+                spoofKill(player, knife)
+            end)
+        end
+
+        return #targetList
     end
 
     -- ==========================================
@@ -275,8 +290,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 7. KNIFE THROW HvH (спавн в N студах от жертвы)
-    --    Используется и в кнопке, и в Knife Aura.
+    -- 7. KNIFE THROW HvH
     -- ==========================================
     local function fireKnifeThrowAt(targetCharacter, spawnDist)
         if not targetCharacter then return false end
@@ -300,7 +314,6 @@ return function(Window)
         pcall(function() ping = LocalPlayer:GetNetworkPing() end)
         ping = math.clamp(ping, 0, 0.4)
 
-        -- Направление: если бежит — вдоль движения; если стоит — по взгляду
         local dir = (speed > 3) and velocity.Unit or mRoot.CFrame.LookVector
 
         local parts = {}
@@ -334,6 +347,33 @@ return function(Window)
     end
 
     -- ==========================================
+    -- 8. HvH AUTO-AIM (пуля в хитбоксе врага)
+    --    Требует: HvHMode ON, видимая часть, дистанция в пределах HvHMaxDistance
+    -- ==========================================
+    local function tryHvHShot(targetChar, gun)
+        if not HvHMode or not targetChar or not gun then return false end
+
+        local myChar = LocalPlayer.Character
+        if not myChar or not myChar:FindFirstChild("RightHand") then return false end
+
+        local mRoot = targetChar:FindFirstChild("HumanoidRootPart")
+        if not mRoot then return false end
+
+        -- Проверка дистанции (анти-палево на killfeed)
+        local dist = (mRoot.Position - myChar.RightHand.Position).Magnitude
+        if dist > HvHMaxDistance then return false end
+
+        -- Проверка видимости
+        if HvHRequireVisible then
+            if not getVisiblePart(targetChar) then return false end
+        end
+
+        -- Стреляем HvH
+        fireBulletAtTarget(targetChar, gun)
+        return true
+    end
+
+    -- ==========================================
     -- СОЗДАНИЕ UI
     -- ==========================================
     CombatTab:CreateSection("Auto-Shoot (Автовыстрел по Мардеру)")
@@ -358,6 +398,33 @@ return function(Window)
             Notify("Автовыстрел (R)", AutoShootEnabled and "ВКЛЮЧЕН" or "ВЫКЛЮЧЕН")
         end
     })
+
+    -- --- HvH секция ---
+    CombatTab:CreateSection("HvH Mode (Instant Hit)")
+
+    CombatTab:CreateToggle({
+        Name = "Включить HvH (пуля в хитбоксе)",
+        CurrentValue = false,
+        Flag = "HvHModeToggle",
+        Callback = function(Value) HvHMode = Value end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "HvH макс. дистанция (studs)",
+        Range = {10, 200}, Increment = 1, CurrentValue = 50,
+        Flag = "HvHMaxDistance",
+        Callback = function(Value) HvHMaxDistance = Value end
+    })
+
+    CombatTab:CreateToggle({
+        Name = "HvH: только по видимым частям",
+        CurrentValue = true,
+        Flag = "HvHRequireVisible",
+        Callback = function(Value) HvHRequireVisible = Value end
+    })
+
+    -- --- Настройки для обычного авто-выстрела ---
+    CombatTab:CreateSection("Auto-Shoot (Fine-Tune)")
 
     CombatTab:CreateSlider({
         Name = "Упреждение (Shoot Offset)",
@@ -403,7 +470,6 @@ return function(Window)
         Name = "Убить всех (Remote Spoof)",
         Callback = function()
             if isKillingAll then return end
-
             local knife = getEquippedKnife()
             if not knife then
                 Notify("MM2 Exploit", "Вы не Мардер!")
@@ -411,18 +477,17 @@ return function(Window)
             end
 
             isKillingAll = true
-            task.spawn(function()
-                for _, player in ipairs(Players:GetPlayers()) do
-                    if player ~= LocalPlayer and player.Character then
-                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
-                        if hum and hum.Health > 0 then
-                            spoofKill(player)
-                            task.wait(0.05)
-                        end
+            local targets = {}
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        table.insert(targets, player)
                     end
                 end
-                isKillingAll = false
-            end)
+            end
+            spoofKillBurst(targets)
+            isKillingAll = false
         end
     })
 
@@ -430,7 +495,6 @@ return function(Window)
         Name = "Убить всех кроме Шерифа",
         Callback = function()
             if isKillingAll then return end
-
             local knife = getEquippedKnife()
             if not knife then
                 Notify("MM2 Exploit", "Вы не Мардер!")
@@ -438,19 +502,18 @@ return function(Window)
             end
 
             isKillingAll = true
-            task.spawn(function()
-                for _, player in ipairs(Players:GetPlayers()) do
-                    if player ~= LocalPlayer and player.Character and not isSheriff(player) then
-                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
-                        if hum and hum.Health > 0 then
-                            spoofKill(player)
-                            task.wait(0.05)
-                        end
+            local targets = {}
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character and not isSheriff(player) then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        table.insert(targets, player)
                     end
                 end
-                isKillingAll = false
-                Notify("MM2 Exploit", "Все кроме Шерифа обработаны")
-            end)
+            end
+            spoofKillBurst(targets)
+            isKillingAll = false
+            Notify("MM2 Exploit", "Все кроме Шерифа обработаны")
         end
     })
 
@@ -458,7 +521,6 @@ return function(Window)
         Name = "Убить Шерифа (Remote Spoof)",
         Callback = function()
             if isKillingSheriff then return end
-
             local knife = getEquippedKnife()
             if not knife then
                 Notify("MM2 Exploit", "Вы не Мардер!")
@@ -482,16 +544,13 @@ return function(Window)
             end
 
             isKillingSheriff = true
-            task.spawn(function()
-                for i = 1, 5 do
-                    if spoofKill(targetSheriff) then
-                        task.wait(0.08)
-                    end
-                    local hum = targetSheriff.Character and targetSheriff.Character:FindFirstChildOfClass("Humanoid")
-                    if not hum or hum.Health <= 0 then break end
-                end
-                isKillingSheriff = false
-            end)
+            for round = 1, 5 do
+                task.spawn(function() spoofKill(targetSheriff, knife) end)
+                task.wait(0.04)
+                local hum = targetSheriff.Character and targetSheriff.Character:FindFirstChildOfClass("Humanoid")
+                if not hum or hum.Health <= 0 then break end
+            end
+            isKillingSheriff = false
         end
     })
 
@@ -520,7 +579,6 @@ return function(Window)
         Name = "Убить выбранного игрока (Remote Spoof)",
         Callback = function()
             if isKillingTarget or SelectedPlayerName == "" then return end
-
             local knife = getEquippedKnife()
             if not knife then
                 Notify("MM2 Exploit", "Вы не Мардер!")
@@ -537,15 +595,13 @@ return function(Window)
             if not hum or hum.Health <= 0 then return end
 
             isKillingTarget = true
-            task.spawn(function()
-                for i = 1, 5 do
-                    spoofKill(targetPlayer)
-                    task.wait(0.08)
-                    local h = targetPlayer.Character and targetPlayer.Character:FindFirstChildOfClass("Humanoid")
-                    if not h or h.Health <= 0 then break end
-                end
-                isKillingTarget = false
-            end)
+            for round = 1, 5 do
+                task.spawn(function() spoofKill(targetPlayer, knife) end)
+                task.wait(0.04)
+                local h = targetPlayer.Character and targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+                if not h or h.Health <= 0 then break end
+            end
+            isKillingTarget = false
         end
     })
 
@@ -624,7 +680,7 @@ return function(Window)
     })
 
     -- ==========================================
-    -- ЕДИНЫЙ ЦИКЛ: Auto-Shoot + Knife Aura
+    -- ЕДИНЫЙ ЦИКЛ: Auto-Shoot (с HvH) + Knife Aura
     -- ==========================================
     RunService.Heartbeat:Connect(function()
         -- --- Knife Aura ---
@@ -641,7 +697,6 @@ return function(Window)
                         if hum and hum.Health > 0 and root and myRoot then
                             local dist = (root.Position - myRoot.Position).Magnitude
                             if dist < nearestDist then
-                                -- Проверка видимости
                                 if getVisiblePart(player.Character) then
                                     nearest = player
                                     nearestDist = dist
@@ -674,6 +729,16 @@ return function(Window)
         local gun = getEquippedGun()
         if not gun then return end
 
+        -- === HvH MODE ===
+        if HvHMode then
+            -- Пуля спавнится прямо у Мардера (как в кнопке "Убить Мардера")
+            IsShooting = true
+            tryHvHShot(murderer.Character, gun)
+            task.delay(shootCooldown, function() IsShooting = false end)
+            return
+        end
+
+        -- === LEGIT MODE (обычный авто-выстрел с упреждением) ===
         local visiblePart = getVisiblePart(murderer.Character)
         if not visiblePart then return end
 
