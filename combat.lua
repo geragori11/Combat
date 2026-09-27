@@ -1,13 +1,15 @@
 -- =========================================================================
 -- Murder Mystery 2: Auto-Shoot + Manual Shoot (R) + HvH Mode
 -- + Murderer/Sheriff Exploits + Remote Kill Spoof + Silent Kill + Knife Aura
--- + Proxy Knife Throw (Бросок ножа от лица другого игрока с проверкой видимости)
+-- + Proxy Knife Throw (Бросок по мышке Ctrl+I, по видимым целям)
+-- + Touch of Death / Проклятый игрок (смерть при приближении к игроку)
 -- =========================================================================
 
 return function(Window)
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
     local StarterGui = game:GetService("StarterGui")
+    local UserInputService = game:GetService("UserInputService")
     local LocalPlayer = Players.LocalPlayer
 
     local CombatTab = Window:CreateTab("COMBAT", 4483362458)
@@ -42,7 +44,14 @@ return function(Window)
     local ProxyAuraNextUse = 0
     local ProxyRequireVisible = true
     local ProxySafeDistance = 5
+    local ProxyRequireCtrlForMouseShoot = true
     local isProxyBursting = false
+
+    -- --- НАСТРОЙКИ TOUCH OF DEATH (ПРОКЛЯТЫЙ ИГРОК) ---
+    local TouchOfDeathEnabled = false
+    local TouchOfDeathDistance = 5
+    local TouchOfDeathCooldown = 0.4
+    local TouchOfDeathNextUse = 0
 
     -- --- НАСТРОЙКИ И СОСТОЯНИЕ EXPLOITS (МАРДЕР) ---
     local SilentKillEnabled = true
@@ -177,7 +186,6 @@ return function(Window)
         return nil
     end
 
-    -- Проверка прямой видимости цели от лица выбранного прокси-игрока
     local function getVisiblePartFrom(originCharacter, targetCharacter)
         if not originCharacter or not targetCharacter then return nil end
 
@@ -477,7 +485,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 7. KNIFE THROW HvH & PROXY THROW
+    -- 7. KNIFE THROW HvH, PROXY TARGET & PROXY MOUSE
     -- ==========================================
     local function fireKnifeThrowAt(targetCharacter, spawnDist)
         if not targetCharacter then return false end
@@ -531,7 +539,6 @@ return function(Window)
         return true
     end
 
-    -- Бросок ножа от лица другого игрока (с защитой от самоликвидации и проверкой видимости)
     local function fireKnifeThrowFromProxy(proxyCharacter, targetCharacter)
         if not proxyCharacter or not targetCharacter then return false end
         if proxyCharacter == targetCharacter then return false end
@@ -551,11 +558,9 @@ return function(Window)
         local targetHum = targetCharacter:FindFirstChildOfClass("Humanoid")
         if not targetHum or targetHum.Health <= 0 then return false end
 
-        -- Защита от самоубийства прокси-игрока: если цель ближе безопасного расстояния, отменяем бросок
         local directDist = (tRoot.Position - pRoot.Position).Magnitude
         if directDist < ProxySafeDistance then return false end
 
-        -- Проверка видимости от лица прокси-игрока
         if ProxyRequireVisible and not getVisiblePartFrom(proxyCharacter, targetCharacter) then
             return false
         end
@@ -568,8 +573,6 @@ return function(Window)
         local toTarget = (tRoot.Position - pRoot.Position)
         local dir = toTarget.Unit
 
-        -- Выносим точку вылета ножа вперед по вектору к цели на 3.8 studs и чуть выше пояса (+0.5 по Y),
-        -- чтобы нож ни при каких условиях не коснулся рук, ног или туловища прокси-игрока
         local spawnOffsetDistance = math.clamp(ProxySafeDistance * 0.75, 3.8, 6.0)
         local proxyOrigin = pRoot.Position + (dir * spawnOffsetDistance) + Vector3.new(0, 0.5, 0)
 
@@ -600,6 +603,73 @@ return function(Window)
         return true
     end
 
+    -- Бросок ножа от лица прокси-игрока в произвольные координаты (курсор мыши)
+    local function fireKnifeThrowFromProxyToPosition(proxyCharacter, targetPos)
+        if not proxyCharacter or not targetPos then return false end
+
+        local knife = getEquippedKnife()
+        if not knife then return false end
+
+        local events = knife:FindFirstChild("Events")
+        if not events then return false end
+        local knifeThrown = events:FindFirstChild("KnifeThrown")
+        if not knifeThrown then return false end
+
+        local pRoot = proxyCharacter:FindFirstChild("HumanoidRootPart") or proxyCharacter:FindFirstChild("Head")
+        if not pRoot then return false end
+
+        local toTarget = targetPos - pRoot.Position
+        local dist = toTarget.Magnitude
+        if dist < ProxySafeDistance then return false end
+
+        local dir = toTarget.Unit
+        local spawnOffsetDistance = math.clamp(ProxySafeDistance * 0.75, 3.8, 6.0)
+        local proxyOrigin = pRoot.Position + (dir * spawnOffsetDistance) + Vector3.new(0, 0.5, 0)
+
+        local originCFrame = CFrame.new(proxyOrigin, targetPos)
+        local targetCFrame = CFrame.new(targetPos)
+
+        pcall(function()
+            knifeThrown:FireServer(originCFrame, targetCFrame)
+        end)
+
+        return true
+    end
+
+    local function proxyShootAtMouse()
+        if ProxyPlayerName == "" then
+            Notify("Proxy Mouse", "Выберите игрока-источника!")
+            return
+        end
+
+        local proxyPlayer = Players:FindFirstChild(ProxyPlayerName)
+        if not proxyPlayer or not proxyPlayer.Character then
+            Notify("Proxy Mouse", "Игрок-источник не найден!")
+            return
+        end
+
+        local mouse = LocalPlayer:GetMouse()
+        if not mouse or not mouse.Hit then return end
+
+        local targetPos = mouse.Hit.Position
+        local pRoot = proxyPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if pRoot and (targetPos - pRoot.Position).Magnitude < ProxySafeDistance then
+            Notify("Proxy Mouse", "Точка курсора слишком близко к источнику!")
+            return
+        end
+
+        local knife = getEquippedKnife()
+        if not knife then
+            Notify("Proxy Mouse", "Вы не Мардер (нет ножа)!")
+            return
+        end
+
+        local ok = fireKnifeThrowFromProxyToPosition(proxyPlayer.Character, targetPos)
+        if ok and SilentKillEnabled then
+            task.delay(SilentKillDelay, function() unequipKnife() end)
+        end
+    end
+
     -- ==========================================
     -- 8. HvH AUTO-AIM & РУЧНОЙ ВЫСТРЕЛ НА R
     -- ==========================================
@@ -623,7 +693,6 @@ return function(Window)
         return true
     end
 
-    -- Одиночный выстрел по клавише R
     local function manualShootOnce()
         if IsManualShooting then return end
 
@@ -645,7 +714,6 @@ return function(Window)
             return
         end
 
-        -- HvH MODE: проверка видимости -> спавн пули в спине/хитбоксе
         if HvHMode then
             if not canHvHTarget(murderer.Character) then return end
             IsManualShooting = true
@@ -657,7 +725,6 @@ return function(Window)
             return
         end
 
-        -- LEGIT MODE для кнопки R
         local visiblePart = getVisiblePart(murderer.Character)
         if not visiblePart then return end
 
@@ -682,6 +749,22 @@ return function(Window)
             IsManualShooting = false
         end)
     end
+
+    -- Обработка хоткея Ctrl + I для броска ножа в курсор мыши
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.KeyCode == Enum.KeyCode.I then
+            if ProxyRequireCtrlForMouseShoot then
+                local isCtrlDown = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+                    or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
+                if isCtrlDown then
+                    proxyShootAtMouse()
+                end
+            else
+                proxyShootAtMouse()
+            end
+        end
+    end)
 
     -- ==========================================
     -- СОЗДАНИЕ UI
@@ -932,7 +1015,7 @@ return function(Window)
     })
 
     -- ==========================================
-    -- PROXY KNIFE THROW (БРОСОК ОТ ЛИЦА ДРУГОГО ИГРОКА)
+    -- PROXY KNIFE THROW (ПОДСТАВА ИГРОКА)
     -- ==========================================
     CombatTab:CreateSection("Proxy Knife Throw (Подстава игрока)")
 
@@ -957,6 +1040,22 @@ return function(Window)
             pcall(function() ProxyPlayerDropdown:Refresh(names, true) end)
         end
     end)
+
+    CombatTab:CreateToggle({
+        Name = "Требовать Ctrl для броска по мышке (Ctrl + I)",
+        CurrentValue = true,
+        Flag = "ProxyRequireCtrlToggle",
+        Callback = function(Value)
+            ProxyRequireCtrlForMouseShoot = Value
+        end
+    })
+
+    CombatTab:CreateButton({
+        Name = "Бросить нож от игрока в курсор мыши (Кнопка)",
+        Callback = function()
+            proxyShootAtMouse()
+        end
+    })
 
     CombatTab:CreateToggle({
         Name = "Включить Proxy Knife Aura",
@@ -1111,6 +1210,38 @@ return function(Window)
     })
 
     -- ==========================================
+    -- TOUCH OF DEATH (ПРОКЛЯТЫЙ ИГРОК)
+    -- ==========================================
+    CombatTab:CreateSection("Touch of Death (Проклятый игрок)")
+
+    CombatTab:CreateToggle({
+        Name = "Включить Touch of Death",
+        CurrentValue = false,
+        Flag = "TouchOfDeathToggle",
+        Callback = function(Value)
+            TouchOfDeathEnabled = Value
+        end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Дистанция смерти при касании (studs)",
+        Range = {2, 12}, Increment = 0.5, CurrentValue = 5,
+        Flag = "TouchOfDeathDistSlider",
+        Callback = function(Value)
+            TouchOfDeathDistance = Value
+        end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Кулдаун касания смерти (сек)",
+        Range = {0.1, 2}, Increment = 0.05, CurrentValue = 0.4,
+        Flag = "TouchOfDeathCooldownSlider",
+        Callback = function(Value)
+            TouchOfDeathCooldown = Value
+        end
+    })
+
+    -- ==========================================
     -- KNIFE AURA
     -- ==========================================
     CombatTab:CreateSection("Knife Aura")
@@ -1167,6 +1298,35 @@ return function(Window)
     -- ЕДИНЫЙ ЦИКЛ
     -- ==========================================
     RunService.Heartbeat:Connect(function()
+        -- Touch of Death (Убийство игроков, подошедших к выбранному игроку)
+        if TouchOfDeathEnabled and os.clock() >= TouchOfDeathNextUse and ProxyPlayerName ~= "" then
+            local proxyPlayer = Players:FindFirstChild(ProxyPlayerName)
+            if proxyPlayer and proxyPlayer.Character then
+                local pChar = proxyPlayer.Character
+                local pHum = pChar:FindFirstChildOfClass("Humanoid")
+                local pRoot = pChar:FindFirstChild("HumanoidRootPart")
+                if pHum and pHum.Health > 0 and pRoot then
+                    local knife = getEquippedKnife()
+                    if knife then
+                        for _, player in ipairs(Players:GetPlayers()) do
+                            if player ~= LocalPlayer and player ~= proxyPlayer and player.Character then
+                                local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                                local root = player.Character:FindFirstChild("HumanoidRootPart")
+                                if hum and hum.Health > 0 and root then
+                                    local dist = (root.Position - pRoot.Position).Magnitude
+                                    if dist <= TouchOfDeathDistance then
+                                        spoofKill(player, knife, SilentKillEnabled)
+                                        TouchOfDeathNextUse = os.clock() + TouchOfDeathCooldown
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
         -- Proxy Knife Aura (Бросок от выбранного игрока по видимым и безопасным целям)
         if ProxyAuraEnabled and os.clock() >= ProxyAuraNextUse and ProxyPlayerName ~= "" then
             local proxyPlayer = Players:FindFirstChild(ProxyPlayerName)
@@ -1184,9 +1344,7 @@ return function(Window)
                                 local root = player.Character:FindFirstChild("HumanoidRootPart")
                                 if hum and hum.Health > 0 and root then
                                     local dist = (root.Position - pRoot.Position).Magnitude
-                                    -- Проверяем дистанцию: цель должна быть дальше безопасного порога, чтобы не задеть игрока-источника
                                     if dist >= ProxySafeDistance and dist < nearestDist then
-                                        -- Проверяем видимость от лица игрока-источника
                                         if not ProxyRequireVisible or getVisiblePartFrom(pChar, player.Character) then
                                             nearestTarget = player
                                             nearestDist = dist
@@ -1254,7 +1412,6 @@ return function(Window)
         local murderer = findMurderer()
         if not murderer or not murderer.Character then return end
 
-        -- HvH MODE: проверка дистанции и видимости -> мгновенный спавн пули в спине
         if HvHMode then
             if not canHvHTarget(murderer.Character) then return end
 
@@ -1267,7 +1424,6 @@ return function(Window)
             return
         end
 
-        -- LEGIT MODE
         local visiblePart = getVisiblePart(murderer.Character)
         if not visiblePart then return end
 
