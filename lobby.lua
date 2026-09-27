@@ -1,7 +1,3 @@
--- =========================================================================
--- XCLIENT MODULE: MM2 VOTING TAB (HORIZONTAL 3-CARD ROW + FIXED SLOT 3)
--- Полный внешний модуль для меню XClient / Rayfield
--- =========================================================================
 
 return function(Window)
     local Players = game:GetService("Players")
@@ -264,7 +260,7 @@ return function(Window)
     local HorizontalCards = {}
 
     -- ==========================================
-    -- ИНЪЕКЦИЯ ГОРИЗОНТАЛЬНОЙ ПАНЕЛИ ИЗ 3 КАРТ
+    -- ИНЪЕКЦИЯ ГОРИЗОНТАЛЬНОЙ ПАНЕЛИ
     -- ==========================================
     local function getHostFrame()
         local getupvals = debug.getupvalues or getupvalues
@@ -317,39 +313,46 @@ return function(Window)
         local host = getHostFrame()
         if not host then return false end
 
-        -- Скрываем стандартный текст Rayfield
+        -- Скрываем все встроенные тексты параграфа Rayfield
         for _, child in ipairs(host:GetChildren()) do
             if child:IsA("TextLabel") then
                 child.Visible = false
             end
         end
 
-        -- Задаём размеры базового контейнера
-        host.Size = UDim2.new(1, 0, 0, 160)
+        -- Сбрасываем внутренние отступы Rayfield, сдвигающие содержимое вниз
+        local rayfieldPadding = host:FindFirstChildOfClass("UIPadding")
+        if rayfieldPadding then
+            rayfieldPadding.PaddingTop = UDim.new(0, 0)
+            rayfieldPadding.PaddingBottom = UDim.new(0, 0)
+            rayfieldPadding.PaddingLeft = UDim.new(0, 0)
+            rayfieldPadding.PaddingRight = UDim.new(0, 0)
+        end
+
+        host.Size = UDim2.new(1, 0, 0, 185)
         host.ClipsDescendants = true
         host.BackgroundTransparency = 1
 
-        -- Очищаем старые инъецированные фреймы, если модуль перезапускался
         local oldRow = host:FindFirstChild("MapRowContainer")
         if oldRow then oldRow:Destroy() end
 
         local rowFrame = Instance.new("Frame")
         rowFrame.Name = "MapRowContainer"
         rowFrame.Size = UDim2.new(1, 0, 1, 0)
+        rowFrame.Position = UDim2.new(0, 0, 0, 0)
         rowFrame.BackgroundTransparency = 1
         rowFrame.Parent = host
 
-        -- 3 равные колонки с отступами
         local cardPositions = {
             UDim2.new(0, 0, 0, 0),
-            UDim2.new(0.345, 0, 0, 0),
-            UDim2.new(0.69, 0, 0, 0)
+            UDim2.new(0.3425, 0, 0, 0),
+            UDim2.new(0.685, 0, 0, 0)
         }
 
         for i = 1, 3 do
             local card = Instance.new("Frame")
             card.Name = "CardSlot_" .. i
-            card.Size = UDim2.new(0.31, 0, 1, 0)
+            card.Size = UDim2.new(0.315, 0, 1, 0)
             card.Position = cardPositions[i]
             card.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
             card.BorderSizePixel = 0
@@ -365,44 +368,49 @@ return function(Window)
             cardStroke.Thickness = 1.2
             cardStroke.Parent = card
 
-            -- Превью картинки карты (аккуратный баннер сверху)
+            -- Контейнер под изображение
+            local imgBox = Instance.new("Frame")
+            imgBox.Name = "ImageBox"
+            imgBox.Size = UDim2.new(1, -8, 0, 84)
+            imgBox.Position = UDim2.new(0, 4, 0, 5)
+            imgBox.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+            imgBox.BorderSizePixel = 0
+            imgBox.ClipsDescendants = true
+            imgBox.Parent = card
+
+            local boxCorner = Instance.new("UICorner")
+            boxCorner.CornerRadius = UDim.new(0, 6)
+            boxCorner.Parent = imgBox
+
+            -- Изображение карты целиком (Fit)
             local img = Instance.new("ImageLabel")
             img.Name = "MapImage"
-            img.Size = UDim2.new(1, -8, 0, 64)
-            img.Position = UDim2.new(0, 4, 0, 4)
-            img.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
-            img.BorderSizePixel = 0
-            img.ScaleType = Enum.ScaleType.Crop
+            img.Size = UDim2.new(1, 0, 1, 0)
+            img.Position = UDim2.new(0, 0, 0, 0)
+            img.BackgroundTransparency = 1
+            img.ScaleType = Enum.ScaleType.Fit
             img.ZIndex = 15
             img.Visible = false
-            img.Parent = card
+            img.Parent = imgBox
 
-            local imgCorner = Instance.new("UICorner")
-            imgCorner.CornerRadius = UDim.new(0, 6)
-            imgCorner.Parent = img
-
-            -- Заглушка, если картинки нет
+            -- Заглушка при отсутствии изображения
             local placeholder = Instance.new("TextLabel")
             placeholder.Name = "Placeholder"
-            placeholder.Size = UDim2.new(1, -8, 0, 64)
-            placeholder.Position = UDim2.new(0, 4, 0, 4)
-            placeholder.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+            placeholder.Size = UDim2.new(1, 0, 1, 0)
+            placeholder.Position = UDim2.new(0, 0, 0, 0)
+            placeholder.BackgroundTransparency = 1
             placeholder.Text = "РАУНД ИДЁТ"
-            placeholder.TextColor3 = Color3.fromRGB(100, 100, 115)
+            placeholder.TextColor3 = Color3.fromRGB(110, 110, 125)
             placeholder.Font = Enum.Font.GothamBold
-            placeholder.TextSize = 9
+            placeholder.TextSize = 10
             placeholder.ZIndex = 14
-            placeholder.Parent = card
-
-            local phCorner = Instance.new("UICorner")
-            phCorner.CornerRadius = UDim.new(0, 6)
-            phCorner.Parent = placeholder
+            placeholder.Parent = imgBox
 
             -- Название карты
             local titleLbl = Instance.new("TextLabel")
             titleLbl.Name = "TitleLabel"
-            titleLbl.Size = UDim2.new(1, -8, 0, 18)
-            titleLbl.Position = UDim2.new(0, 4, 0, 71)
+            titleLbl.Size = UDim2.new(1, -6, 0, 18)
+            titleLbl.Position = UDim2.new(0, 3, 0, 93)
             titleLbl.BackgroundTransparency = 1
             titleLbl.Text = "Карта #" .. i
             titleLbl.TextColor3 = Color3.fromRGB(240, 240, 240)
@@ -412,11 +420,11 @@ return function(Window)
             titleLbl.TextXAlignment = Enum.TextXAlignment.Center
             titleLbl.Parent = card
 
-            -- Счетчик голосов
+            -- Счётчик голосов
             local votesLbl = Instance.new("TextLabel")
             votesLbl.Name = "VotesLabel"
-            votesLbl.Size = UDim2.new(1, -8, 0, 14)
-            votesLbl.Position = UDim2.new(0, 4, 0, 89)
+            votesLbl.Size = UDim2.new(1, -6, 0, 16)
+            votesLbl.Position = UDim2.new(0, 3, 0, 113)
             votesLbl.BackgroundTransparency = 1
             votesLbl.Text = "Голосов: 0"
             votesLbl.TextColor3 = Color3.fromRGB(130, 180, 255)
@@ -425,11 +433,11 @@ return function(Window)
             votesLbl.TextXAlignment = Enum.TextXAlignment.Center
             votesLbl.Parent = card
 
-            -- Кнопка выбора/глитча карты
+            -- Кнопка выбора карты
             local actionBtn = Instance.new("TextButton")
             actionBtn.Name = "ActionButton"
             actionBtn.Size = UDim2.new(1, -8, 0, 28)
-            actionBtn.Position = UDim2.new(0, 4, 1, -33)
+            actionBtn.Position = UDim2.new(0, 4, 1, -34)
             actionBtn.BackgroundColor3 = Color3.fromRGB(38, 38, 48)
             actionBtn.Text = "ВЫБРАТЬ"
             actionBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -489,7 +497,7 @@ return function(Window)
 
                 local cardUI = HorizontalCards[i]
                 if cardUI then
-                    -- 1. Картинка
+                    -- 1. Картинка (полное отображение)
                     if isValidVoteImage(mImg) then
                         if cardUI.LastImage ~= mImg then
                             cardUI.Image.Image = mImg
@@ -506,14 +514,14 @@ return function(Window)
                         end
                     end
 
-                    -- 2. Название
+                    -- 2. Название карты
                     local cleanName = (mName ~= "" and mName ~= "MapName") and mName or ("Карта " .. i)
                     if cardUI.LastTitle ~= cleanName then
                         cardUI.Title.Text = cleanName
                         cardUI.LastTitle = cleanName
                     end
 
-                    -- 3. Голоса
+                    -- 3. Количество голосов
                     if cardUI.LastVotes ~= vCount then
                         cardUI.Votes.Text = "Голосов: " .. tostring(vCount)
                         cardUI.LastVotes = vCount
