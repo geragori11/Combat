@@ -1,5 +1,6 @@
 -- =========================================================================
--- XCLIENT MODULE: MM2 VOTING TAB (FIXED GETHUI INJECTION & IMAGES)
+-- XCLIENT MODULE: MM2 VOTING TAB (DIRECT UPVALUE INJECTION + ZERO LAG)
+-- Внешний подключаемый модуль для меню XClient / Rayfield
 -- =========================================================================
 
 return function(Window)
@@ -68,6 +69,19 @@ return function(Window)
         return true
     end
 
+    local function findImageInInstance(inst)
+        if not inst then return nil end
+        for _, desc in ipairs(inst:GetDescendants()) do
+            if desc:IsA("ImageLabel") or desc:IsA("Decal") then
+                local img = desc:IsA("ImageLabel") and desc.Image or desc.Texture
+                if typeof(img) == "string" and #img > 5 and isValidVoteImage(img) then
+                    return img
+                end
+            end
+        end
+        return nil
+    end
+
     local function getVoteCardData(index)
         local lobby = getLobby()
         if not lobby then return "Карта " .. index, 0, "", false end
@@ -76,6 +90,7 @@ return function(Window)
         local votesCount = 0
         local mapImage = ""
 
+        -- 1. Считывание названия и количества голосов из VotePadX
         local votePadModel = lobby:FindFirstChild("VotePad" .. tostring(index))
         if votePadModel then
             local voteInfoGui = votePadModel:FindFirstChild("VoteInfoGui")
@@ -91,21 +106,15 @@ return function(Window)
                 end
             end
 
-            local mapInfoGui = votePadModel:FindFirstChild("MapInfoGui")
-            local mapIcon = mapInfoGui and mapInfoGui:FindFirstChild("MapIcon")
-            if mapIcon and mapIcon:IsA("ImageLabel") and isValidVoteImage(mapIcon.Image) then
-                mapImage = mapIcon.Image
-            end
+            -- Извлечение картинки из модели пада
+            mapImage = findImageInInstance(votePadModel) or ""
         end
 
+        -- 2. Если в VotePadX картинка не найдена, ищем в VoteIcons
         if not isValidVoteImage(mapImage) and lobby:FindFirstChild("VoteIcons") then
             local padIcon = lobby.VoteIcons:FindFirstChild("VotePad" .. tostring(index))
             if padIcon then
-                local surface = padIcon:FindFirstChild("Surface")
-                local bg = surface and surface:FindFirstChild("Background")
-                if bg and bg:IsA("ImageLabel") and isValidVoteImage(bg.Image) then
-                    mapImage = bg.Image
-                end
+                mapImage = findImageInInstance(padIcon) or ""
             end
         end
 
@@ -247,21 +256,21 @@ return function(Window)
     })
 
     local MapWidgets = {}
-    local UniqueSlotTags = {
-        "__RAYFIELD_MAP_IMG_1__",
-        "__RAYFIELD_MAP_IMG_2__",
-        "__RAYFIELD_MAP_IMG_3__"
+    local SlotTags = {
+        "RAYFIELD_MAP_IMG_1",
+        "RAYFIELD_MAP_IMG_2",
+        "RAYFIELD_MAP_IMG_3"
     }
 
     for i = 1, 3 do
         VotingTab:CreateSection("Слот карты #" .. i)
 
-        VotingTab:CreateParagraph({
-            Title = UniqueSlotTags[i],
-            Content = ""
+        local paragraphObj = VotingTab:CreateParagraph({
+            Title = SlotTags[i],
+            Content = " "
         })
 
-        local btn = VotingTab:CreateButton({
+        local buttonObj = VotingTab:CreateButton({
             Name = string.format("Выбрать Карту %d (Ожидание)", i),
             Callback = function()
                 startVoteGlitchLoop(i)
@@ -269,104 +278,137 @@ return function(Window)
         })
 
         MapWidgets[i] = {
-            Button = btn,
+            ParagraphObj = paragraphObj,
+            ButtonObj = buttonObj,
+            FrameInstance = nil,
             ImageLabel = nil,
             Placeholder = nil,
-            Container = nil,
             LastImage = "",
             LastText = ""
         }
     end
 
     -- ==========================================
-    -- ПОИСК И ИНЪЕКЦИЯ С ПОДДЕРЖКОЙ GETHUI()
+    -- МГНОВЕННЫЙ ЗАХВАТ ИНТЕРФЕЙСА ЧЕРЕЗ UPVALUES
     -- ==========================================
-    local function getSearchRoots()
-        local roots = {}
-        if typeof(gethui) == "function" then
-            local ok, h = pcall(gethui)
-            if ok and h then table.insert(roots, h) end
-        end
-        if CoreGui then table.insert(roots, CoreGui) end
-        if LocalPlayer:FindFirstChild("PlayerGui") then
-            table.insert(roots, LocalPlayer.PlayerGui)
-        end
-        return roots
-    end
+    local function attachImageToParagraph(slotIndex)
+        local widget = MapWidgets[slotIndex]
+        if widget.ImageLabel then return true end
 
-    local function tryInjectSlot(slotIndex)
-        local tag = UniqueSlotTags[slotIndex]
-        local roots = getSearchRoots()
+        local targetFrame = nil
 
-        for _, root in ipairs(roots) do
-            local foundDesc = nil
+        -- Способ 1: Прямое извлечение GUI-объекта из функции Set (0 мс, 0 лагов)
+        local getupvals = debug.getupvalues or getupvalues
+        if getupvals and widget.ParagraphObj and type(widget.ParagraphObj.Set) == "function" then
             pcall(function()
-                for _, desc in ipairs(root:GetDescendants()) do
-                    if desc:IsA("TextLabel") and desc.Text:find(tag) then
-                        foundDesc = desc
+                for _, uv in pairs(getupvals(widget.ParagraphObj.Set)) do
+                    if typeof(uv) == "Instance" and (uv:IsA("Frame") or uv:IsA("GuiObject")) then
+                        targetFrame = uv
                         break
+                    elseif type(uv) == "table" then
+                        for _, sub in pairs(uv) do
+                            if typeof(sub) == "Instance" and (sub:IsA("Frame") or sub:IsA("GuiObject")) then
+                                targetFrame = sub
+                                break
+                            end
+                        end
                     end
                 end
             end)
+        end
 
-            if foundDesc then
-                local box = foundDesc.Parent
-                if box and (box:IsA("Frame") or box:IsA("GuiObject")) then
-                    -- Скрываем стандартные тексты меток Rayfield
-                    for _, child in ipairs(box:GetChildren()) do
-                        if child:IsA("TextLabel") then
-                            child.Text = ""
-                            child.Visible = false
-                        end
+        -- Способ 2: Точечный поиск внутри ScreenGui без обращения к глобальному CoreGui
+        if not targetFrame then
+            local tag = SlotTags[slotIndex]
+            local screenGuis = {}
+
+            if typeof(gethui) == "function" then
+                pcall(function()
+                    for _, c in ipairs(gethui():GetChildren()) do
+                        if c:IsA("ScreenGui") then table.insert(screenGuis, c) end
                     end
-
-                    -- Фиксируем высоту блока под баннер
-                    box.Size = UDim2.new(1, 0, 0, 115)
-                    box.ClipsDescendants = true
-                    box.BackgroundTransparency = 0
-                    box.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
-
-                    -- Создаём ImageLabel для картинки карты
-                    local img = Instance.new("ImageLabel")
-                    img.Name = "InjectedMapPreview_" .. slotIndex
-                    img.Size = UDim2.new(1, -12, 1, -12)
-                    img.Position = UDim2.new(0, 6, 0, 6)
-                    img.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-                    img.BorderSizePixel = 0
-                    img.ScaleType = Enum.ScaleType.Crop
-                    img.ZIndex = 25
-                    img.Visible = false
-                    img.Parent = box
-
-                    local corner = Instance.new("UICorner")
-                    corner.CornerRadius = UDim.new(0, 8)
-                    corner.Parent = img
-
-                    -- Текст-заглушка на случай отсутствия изображения
-                    local placeholder = Instance.new("TextLabel")
-                    placeholder.Name = "Placeholder"
-                    placeholder.Size = UDim2.new(1, 0, 1, 0)
-                    placeholder.BackgroundTransparency = 1
-                    placeholder.Text = "КАРТА НЕ ЗАГРУЖЕНА / РАУНД ИДЁТ"
-                    placeholder.TextColor3 = Color3.fromRGB(130, 130, 145)
-                    placeholder.Font = Enum.Font.GothamBold
-                    placeholder.TextSize = 11
-                    placeholder.ZIndex = 26
-                    placeholder.Visible = true
-                    placeholder.Parent = box
-
-                    MapWidgets[slotIndex].ImageLabel = img
-                    MapWidgets[slotIndex].Placeholder = placeholder
-                    MapWidgets[slotIndex].Container = box
-                    return true
+                end)
+            end
+            if CoreGui then
+                pcall(function()
+                    for _, c in ipairs(CoreGui:GetChildren()) do
+                        if c:IsA("ScreenGui") then table.insert(screenGuis, c) end
+                    end
+                end)
+            end
+            if LocalPlayer:FindFirstChild("PlayerGui") then
+                for _, c in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
+                    if c:IsA("ScreenGui") then table.insert(screenGuis, c) end
                 end
             end
+
+            for _, sg in ipairs(screenGuis) do
+                pcall(function()
+                    for _, d in ipairs(sg:GetDescendants()) do
+                        if d:IsA("TextLabel") and d.Text:find(tag) then
+                            local parentBox = d.Parent
+                            if parentBox and parentBox:IsA("GuiObject") then
+                                targetFrame = parentBox
+                                break
+                            end
+                        end
+                    end
+                end)
+                if targetFrame then break end
+            end
         end
+
+        if targetFrame then
+            -- Скрываем все внутренние тексты параграфа Rayfield
+            for _, child in ipairs(targetFrame:GetChildren()) do
+                if child:IsA("TextLabel") then
+                    child.Visible = false
+                end
+            end
+
+            targetFrame.Size = UDim2.new(1, 0, 0, 120)
+            targetFrame.ClipsDescendants = true
+            targetFrame.BackgroundTransparency = 0
+            targetFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+
+            local img = Instance.new("ImageLabel")
+            img.Name = "InjectedMapPreview_" .. slotIndex
+            img.Size = UDim2.new(1, -12, 1, -12)
+            img.Position = UDim2.new(0, 6, 0, 6)
+            img.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+            img.BorderSizePixel = 0
+            img.ScaleType = Enum.ScaleType.Crop
+            img.ZIndex = 25
+            img.Visible = false
+            img.Parent = targetFrame
+
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 8)
+            corner.Parent = img
+
+            local placeholder = Instance.new("TextLabel")
+            placeholder.Name = "Placeholder"
+            placeholder.Size = UDim2.new(1, 0, 1, 0)
+            placeholder.BackgroundTransparency = 1
+            placeholder.Text = "КАРТА НЕ ЗАГРУЖЕНА / РАУНД ИДЁТ"
+            placeholder.TextColor3 = Color3.fromRGB(130, 130, 145)
+            placeholder.Font = Enum.Font.GothamBold
+            placeholder.TextSize = 11
+            placeholder.ZIndex = 26
+            placeholder.Visible = true
+            placeholder.Parent = targetFrame
+
+            widget.FrameInstance = targetFrame
+            widget.ImageLabel = img
+            widget.Placeholder = placeholder
+            return true
+        end
+
         return false
     end
 
     -- ==========================================
-    -- ЛЁГКИЙ ЦИКЛ ОБНОВЛЕНИЯ (БЕЗ ПРОСАДОК FPS)
+    -- ОПТИМИЗИРОВАННЫЙ ЦИКЛ ОБНОВЛЕНИЯ (0.4 СЕК)
     -- ==========================================
     local lastStatusText = ""
 
@@ -377,15 +419,14 @@ return function(Window)
             for i = 1, 3 do
                 local widget = MapWidgets[i]
 
-                -- Если картинка ещё не внедрена в этот слот, пробуем внедрить
                 if not widget.ImageLabel then
-                    tryInjectSlot(i)
+                    attachImageToParagraph(i)
                 end
 
                 local mName, vCount, mImg, isCardActive = getVoteCardData(i)
                 if isCardActive then anyVoteActive = true end
 
-                -- 1. Обновление изображения
+                -- 1. Обновление картинки в виджете
                 if widget.ImageLabel then
                     if isValidVoteImage(mImg) then
                         if widget.LastImage ~= mImg then
@@ -404,7 +445,7 @@ return function(Window)
                     end
                 end
 
-                -- 2. Обновление текста кнопки
+                -- 2. Обновление кнопки
                 local prefix = ""
                 if IsGlitchingVote and TargetVoteIndex == i then
                     prefix = "[ФАРМИТСЯ] "
@@ -417,8 +458,8 @@ return function(Window)
 
                 if widget.LastText ~= newBtnText then
                     widget.LastText = newBtnText
-                    if widget.Button and widget.Button.Set then
-                        widget.Button:Set(newBtnText)
+                    if widget.ButtonObj and widget.ButtonObj.Set then
+                        widget.ButtonObj:Set(newBtnText)
                     end
                 end
             end
