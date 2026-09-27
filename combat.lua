@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Murder Mystery 2: Auto-Shoot + Manual Shoot (R) + HvH Mode
 -- + Murderer/Sheriff Exploits + Remote Kill Spoof + Silent Kill + Knife Aura
--- + Proxy Knife Throw (Бросок ножа от лица другого игрока)
+-- + Proxy Knife Throw (Бросок ножа от лица другого игрока с проверкой видимости)
 -- =========================================================================
 
 return function(Window)
@@ -26,7 +26,7 @@ return function(Window)
     local HvHMode = false
     local HvHMaxDistance = 150
     local HvHRequireVisible = true
-    local HvHShootCooldown = 0.25         -- ОТДЕЛЬНЫЙ кулдаун для HvH (быстрый!)
+    local HvHShootCooldown = 0.25
 
     -- --- НАСТРОЙКИ KNIFE AURA ---
     local KnifeAuraEnabled = false
@@ -34,12 +34,14 @@ return function(Window)
     local KnifeAuraCooldown = 1.2
     local KnifeAuraNextUse = 0
 
-    -- --- НАСТРОЙКИ PROXY KNIFE THROW (БРОСОК ОТ ЛИЦА ДРУГОГО ИГРОКА) ---
+    -- --- НАСТРОЙКИ PROXY KNIFE THROW ---
     local ProxyAuraEnabled = false
     local ProxyPlayerName = ""
     local ProxyAuraRange = 60
     local ProxyAuraCooldown = 0.8
     local ProxyAuraNextUse = 0
+    local ProxyRequireVisible = true
+    local ProxySafeDistance = 5
     local isProxyBursting = false
 
     -- --- НАСТРОЙКИ И СОСТОЯНИЕ EXPLOITS (МАРДЕР) ---
@@ -116,7 +118,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 3. ПРОВЕРКА ВИДИМОСТИ
+    -- 3. ПРОВЕРКА ВИДИМОСТИ (ОТ СЕБЯ И ОТ ДРУГОГО ИГРОКА)
     -- ==========================================
     local function getVisiblePart(targetCharacter)
         local myChar = LocalPlayer.Character
@@ -130,6 +132,67 @@ return function(Window)
         local origin = originPart.Position
         local raycastParams = RaycastParams.new()
         raycastParams.FilterDescendantsInstances = { myChar }
+        raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+        raycastParams.IgnoreWater = true
+
+        local priorityNames = {
+            "Head", "UpperTorso", "Torso", "LowerTorso",
+            "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
+            "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg"
+        }
+
+        for _, name in ipairs(priorityNames) do
+            local part = targetCharacter:FindFirstChild(name)
+            if part and part:IsA("BasePart") and part.Transparency < 1 then
+                local targetPos = part.Position
+                local vec = targetPos - origin
+                local dist = vec.Magnitude
+                if dist > 0.1 then
+                    local direction = vec.Unit * (dist + 2)
+                    local result = workspace:Raycast(origin, direction, raycastParams)
+                    if result and result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
+                        return part
+                    end
+                end
+            end
+        end
+
+        for _, part in ipairs(targetCharacter:GetDescendants()) do
+            if part:IsA("BasePart")
+                and part.Name ~= "HumanoidRootPart"
+                and part.Transparency < 1
+            then
+                local targetPos = part.Position
+                local vec = targetPos - origin
+                local dist = vec.Magnitude
+                if dist > 0.1 then
+                    local direction = vec.Unit * (dist + 2)
+                    local result = workspace:Raycast(origin, direction, raycastParams)
+                    if result and result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
+                        return part
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    -- Проверка прямой видимости цели от лица выбранного прокси-игрока
+    local function getVisiblePartFrom(originCharacter, targetCharacter)
+        if not originCharacter or not targetCharacter then return nil end
+
+        local originPart = originCharacter:FindFirstChild("Head")
+            or originCharacter:FindFirstChild("UpperTorso")
+            or originCharacter:FindFirstChild("HumanoidRootPart")
+        if not originPart then return nil end
+
+        local origin = originPart.Position
+        local raycastParams = RaycastParams.new()
+        local filterList = { originCharacter }
+        if LocalPlayer.Character then
+            table.insert(filterList, LocalPlayer.Character)
+        end
+        raycastParams.FilterDescendantsInstances = filterList
         raycastParams.FilterType = Enum.RaycastFilterType.Exclude
         raycastParams.IgnoreWater = true
 
@@ -372,7 +435,6 @@ return function(Window)
         end
         if #bodyParts == 0 then return false end
 
-        -- Строго за спиной мардера с направлением в хитбокс
         local backDir = -mRoot.CFrame.LookVector
         local spawnDist = math.clamp(1.6 - speed * 0.015, 0.5, 1.6)
 
@@ -469,9 +531,10 @@ return function(Window)
         return true
     end
 
-    -- Бросок ножа от лица другого игрока (Proxy Throw)
+    -- Бросок ножа от лица другого игрока (с защитой от самоликвидации и проверкой видимости)
     local function fireKnifeThrowFromProxy(proxyCharacter, targetCharacter)
         if not proxyCharacter or not targetCharacter then return false end
+        if proxyCharacter == targetCharacter then return false end
 
         local knife = getEquippedKnife()
         if not knife then return false end
@@ -488,14 +551,27 @@ return function(Window)
         local targetHum = targetCharacter:FindFirstChildOfClass("Humanoid")
         if not targetHum or targetHum.Health <= 0 then return false end
 
+        -- Защита от самоубийства прокси-игрока: если цель ближе безопасного расстояния, отменяем бросок
+        local directDist = (tRoot.Position - pRoot.Position).Magnitude
+        if directDist < ProxySafeDistance then return false end
+
+        -- Проверка видимости от лица прокси-игрока
+        if ProxyRequireVisible and not getVisiblePartFrom(proxyCharacter, targetCharacter) then
+            return false
+        end
+
         local targetVelocity = tRoot.AssemblyLinearVelocity
         local ping = 0
         pcall(function() ping = LocalPlayer:GetNetworkPing() end)
         ping = math.clamp(ping, 0, 0.4)
 
-        -- Точка старта ножа: прямо перед лицом/грудью выбранного прокси-игрока
-        local proxyForward = proxyCharacter:FindFirstChild("HumanoidRootPart") and proxyCharacter.HumanoidRootPart.CFrame.LookVector or Vector3.new(0, 0, -1)
-        local proxyOrigin = pRoot.Position + (proxyForward * 1.5)
+        local toTarget = (tRoot.Position - pRoot.Position)
+        local dir = toTarget.Unit
+
+        -- Выносим точку вылета ножа вперед по вектору к цели на 3.8 studs и чуть выше пояса (+0.5 по Y),
+        -- чтобы нож ни при каких условиях не коснулся рук, ног или туловища прокси-игрока
+        local spawnOffsetDistance = math.clamp(ProxySafeDistance * 0.75, 3.8, 6.0)
+        local proxyOrigin = pRoot.Position + (dir * spawnOffsetDistance) + Vector3.new(0, 0.5, 0)
 
         local parts = {}
         for _, name in ipairs({"Head", "UpperTorso", "Torso", "LowerTorso"}) do
@@ -569,7 +645,7 @@ return function(Window)
             return
         end
 
-        -- HvH MODE: проверка видимости -> спавн пули в спине/хитбоксе как в "Убить Мардера"
+        -- HvH MODE: проверка видимости -> спавн пули в спине/хитбоксе
         if HvHMode then
             if not canHvHTarget(murderer.Character) then return end
             IsManualShooting = true
@@ -856,7 +932,7 @@ return function(Window)
     })
 
     -- ==========================================
-    -- PROXY KNIFE THROW (БРОСОК ОТ ЛИЦА ИГРОКА)
+    -- PROXY KNIFE THROW (БРОСОК ОТ ЛИЦА ДРУГОГО ИГРОКА)
     -- ==========================================
     CombatTab:CreateSection("Proxy Knife Throw (Подстава игрока)")
 
@@ -871,7 +947,6 @@ return function(Window)
         end
     })
 
-    -- Авто-обновление списков игроков в обоих Dropdown
     task.spawn(function()
         while task.wait(2) do
             local names = {}
@@ -889,6 +964,24 @@ return function(Window)
         Flag = "ProxyAuraToggle",
         Callback = function(Value)
             ProxyAuraEnabled = Value
+        end
+    })
+
+    CombatTab:CreateToggle({
+        Name = "Proxy: только видимые цели (от лица игрока)",
+        CurrentValue = true,
+        Flag = "ProxyRequireVisibleToggle",
+        Callback = function(Value)
+            ProxyRequireVisible = Value
+        end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Proxy мин. дистанция безопасности (studs)",
+        Range = {3, 15}, Increment = 0.5, CurrentValue = 5,
+        Flag = "ProxySafeDistanceSlider",
+        Callback = function(Value)
+            ProxySafeDistance = Value
         end
     })
 
@@ -933,16 +1026,24 @@ return function(Window)
 
             isProxyBursting = true
             local thrownCount = 0
+            local pRoot = proxyPlayer.Character:FindFirstChild("HumanoidRootPart")
+
             for _, target in ipairs(Players:GetPlayers()) do
                 if target ~= LocalPlayer and target ~= proxyPlayer and target.Character then
                     local hum = target.Character:FindFirstChildOfClass("Humanoid")
-                    if hum and hum.Health > 0 then
-                        task.spawn(function()
-                            task.wait(math.random() * 0.02)
-                            if fireKnifeThrowFromProxy(proxyPlayer.Character, target.Character) then
-                                thrownCount = thrownCount + 1
+                    local tRoot = target.Character:FindFirstChild("HumanoidRootPart")
+                    if hum and hum.Health > 0 and tRoot and pRoot then
+                        local dist = (tRoot.Position - pRoot.Position).Magnitude
+                        if dist >= ProxySafeDistance then
+                            if not ProxyRequireVisible or getVisiblePartFrom(proxyPlayer.Character, target.Character) then
+                                task.spawn(function()
+                                    task.wait(math.random() * 0.02)
+                                    if fireKnifeThrowFromProxy(proxyPlayer.Character, target.Character) then
+                                        thrownCount = thrownCount + 1
+                                    end
+                                end)
                             end
-                        end)
+                        end
                     end
                 end
             end
@@ -975,6 +1076,21 @@ return function(Window)
             end
             if not targetPlayer or not targetPlayer.Character then
                 Notify("Proxy Throw", "Цель не найдена!")
+                return
+            end
+
+            local pRoot = proxyPlayer.Character:FindFirstChild("HumanoidRootPart")
+            local tRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if pRoot and tRoot then
+                local directDist = (tRoot.Position - pRoot.Position).Magnitude
+                if directDist < ProxySafeDistance then
+                    Notify("Proxy Throw", "Цель слишком близко к источнику (опасность суицида)!")
+                    return
+                end
+            end
+
+            if ProxyRequireVisible and not getVisiblePartFrom(proxyPlayer.Character, targetPlayer.Character) then
+                Notify("Proxy Throw", "Цель не видна игроку-источнику!")
                 return
             end
 
@@ -1051,7 +1167,7 @@ return function(Window)
     -- ЕДИНЫЙ ЦИКЛ
     -- ==========================================
     RunService.Heartbeat:Connect(function()
-        -- Proxy Knife Aura (Бросок от выбранного игрока по ближайшим к нему)
+        -- Proxy Knife Aura (Бросок от выбранного игрока по видимым и безопасным целям)
         if ProxyAuraEnabled and os.clock() >= ProxyAuraNextUse and ProxyPlayerName ~= "" then
             local proxyPlayer = Players:FindFirstChild(ProxyPlayerName)
             if proxyPlayer and proxyPlayer.Character then
@@ -1068,9 +1184,13 @@ return function(Window)
                                 local root = player.Character:FindFirstChild("HumanoidRootPart")
                                 if hum and hum.Health > 0 and root then
                                     local dist = (root.Position - pRoot.Position).Magnitude
-                                    if dist < nearestDist then
-                                        nearestTarget = player
-                                        nearestDist = dist
+                                    -- Проверяем дистанцию: цель должна быть дальше безопасного порога, чтобы не задеть игрока-источника
+                                    if dist >= ProxySafeDistance and dist < nearestDist then
+                                        -- Проверяем видимость от лица игрока-источника
+                                        if not ProxyRequireVisible or getVisiblePartFrom(pChar, player.Character) then
+                                            nearestTarget = player
+                                            nearestDist = dist
+                                        end
                                     end
                                 end
                             end
