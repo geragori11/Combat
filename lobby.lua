@@ -1,6 +1,6 @@
 -- =========================================================================
--- XCLIENT MODULE: MM2 VOTING TAB (DIRECT UPVALUE INJECTION + ZERO LAG)
--- Внешний подключаемый модуль для меню XClient / Rayfield
+-- XCLIENT MODULE: MM2 VOTING TAB (HORIZONTAL 3-CARD ROW + FIXED SLOT 3)
+-- Полный внешний модуль для меню XClient / Rayfield
 -- =========================================================================
 
 return function(Window)
@@ -90,7 +90,6 @@ return function(Window)
         local votesCount = 0
         local mapImage = ""
 
-        -- 1. Считывание названия и количества голосов из VotePadX
         local votePadModel = lobby:FindFirstChild("VotePad" .. tostring(index))
         if votePadModel then
             local voteInfoGui = votePadModel:FindFirstChild("VoteInfoGui")
@@ -106,11 +105,9 @@ return function(Window)
                 end
             end
 
-            -- Извлечение картинки из модели пада
             mapImage = findImageInInstance(votePadModel) or ""
         end
 
-        -- 2. Если в VotePadX картинка не найдена, ищем в VoteIcons
         if not isValidVoteImage(mapImage) and lobby:FindFirstChild("VoteIcons") then
             local padIcon = lobby.VoteIcons:FindFirstChild("VotePad" .. tostring(index))
             if padIcon then
@@ -142,7 +139,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- УПРАВЛЕНИЕ ГЛИТЧЕМ (0.8с -> Ресет)
+    -- УПРАВЛЕНИЕ ГЛИТЧЕМ (ТП -> 0.8с -> Ресет)
     -- ==========================================
     local function stopVoteGlitch(reason)
         if not IsGlitchingVote and not CurrentVoteThread then return end
@@ -255,229 +252,318 @@ return function(Window)
         end
     })
 
-    local MapWidgets = {}
-    local SlotTags = {
-        "RAYFIELD_MAP_IMG_1",
-        "RAYFIELD_MAP_IMG_2",
-        "RAYFIELD_MAP_IMG_3"
-    }
+    VotingTab:CreateSection("Карты Лобби")
 
-    for i = 1, 3 do
-        VotingTab:CreateSection("Слот карты #" .. i)
+    local UNIQUE_ROW_TAG = "HORIZONTAL_ROW_CONTAINER_VOTE"
 
-        local paragraphObj = VotingTab:CreateParagraph({
-            Title = SlotTags[i],
-            Content = " "
-        })
+    local HostParagraph = VotingTab:CreateParagraph({
+        Title = UNIQUE_ROW_TAG,
+        Content = " "
+    })
 
-        local buttonObj = VotingTab:CreateButton({
-            Name = string.format("Выбрать Карту %d (Ожидание)", i),
-            Callback = function()
-                startVoteGlitchLoop(i)
-            end
-        })
-
-        MapWidgets[i] = {
-            ParagraphObj = paragraphObj,
-            ButtonObj = buttonObj,
-            FrameInstance = nil,
-            ImageLabel = nil,
-            Placeholder = nil,
-            LastImage = "",
-            LastText = ""
-        }
-    end
+    local HorizontalCards = {}
 
     -- ==========================================
-    -- МГНОВЕННЫЙ ЗАХВАТ ИНТЕРФЕЙСА ЧЕРЕЗ UPVALUES
+    -- ИНЪЕКЦИЯ ГОРИЗОНТАЛЬНОЙ ПАНЕЛИ ИЗ 3 КАРТ
     -- ==========================================
-    local function attachImageToParagraph(slotIndex)
-        local widget = MapWidgets[slotIndex]
-        if widget.ImageLabel then return true end
-
-        local targetFrame = nil
-
-        -- Способ 1: Прямое извлечение GUI-объекта из функции Set (0 мс, 0 лагов)
+    local function getHostFrame()
         local getupvals = debug.getupvalues or getupvalues
-        if getupvals and widget.ParagraphObj and type(widget.ParagraphObj.Set) == "function" then
+        if getupvals and HostParagraph and type(HostParagraph.Set) == "function" then
+            local found = nil
             pcall(function()
-                for _, uv in pairs(getupvals(widget.ParagraphObj.Set)) do
+                for _, uv in pairs(getupvals(HostParagraph.Set)) do
                     if typeof(uv) == "Instance" and (uv:IsA("Frame") or uv:IsA("GuiObject")) then
-                        targetFrame = uv
+                        found = uv
                         break
                     elseif type(uv) == "table" then
                         for _, sub in pairs(uv) do
                             if typeof(sub) == "Instance" and (sub:IsA("Frame") or sub:IsA("GuiObject")) then
-                                targetFrame = sub
+                                found = sub
                                 break
                             end
                         end
                     end
                 end
             end)
+            if found then return found end
         end
 
-        -- Способ 2: Точечный поиск внутри ScreenGui без обращения к глобальному CoreGui
-        if not targetFrame then
-            local tag = SlotTags[slotIndex]
-            local screenGuis = {}
+        local searchRoots = {}
+        if typeof(gethui) == "function" then
+            local ok, h = pcall(gethui)
+            if ok and h then table.insert(searchRoots, h) end
+        end
+        if CoreGui then table.insert(searchRoots, CoreGui) end
+        if LocalPlayer:FindFirstChild("PlayerGui") then
+            table.insert(searchRoots, LocalPlayer.PlayerGui)
+        end
 
-            if typeof(gethui) == "function" then
-                pcall(function()
-                    for _, c in ipairs(gethui():GetChildren()) do
-                        if c:IsA("ScreenGui") then table.insert(screenGuis, c) end
+        for _, root in ipairs(searchRoots) do
+            local match = nil
+            pcall(function()
+                for _, desc in ipairs(root:GetDescendants()) do
+                    if desc:IsA("TextLabel") and desc.Text:find(UNIQUE_ROW_TAG) then
+                        match = desc.Parent
+                        break
                     end
-                end)
-            end
-            if CoreGui then
-                pcall(function()
-                    for _, c in ipairs(CoreGui:GetChildren()) do
-                        if c:IsA("ScreenGui") then table.insert(screenGuis, c) end
-                    end
-                end)
-            end
-            if LocalPlayer:FindFirstChild("PlayerGui") then
-                for _, c in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
-                    if c:IsA("ScreenGui") then table.insert(screenGuis, c) end
                 end
-            end
-
-            for _, sg in ipairs(screenGuis) do
-                pcall(function()
-                    for _, d in ipairs(sg:GetDescendants()) do
-                        if d:IsA("TextLabel") and d.Text:find(tag) then
-                            local parentBox = d.Parent
-                            if parentBox and parentBox:IsA("GuiObject") then
-                                targetFrame = parentBox
-                                break
-                            end
-                        end
-                    end
-                end)
-                if targetFrame then break end
-            end
+            end)
+            if match then return match end
         end
-
-        if targetFrame then
-            -- Скрываем все внутренние тексты параграфа Rayfield
-            for _, child in ipairs(targetFrame:GetChildren()) do
-                if child:IsA("TextLabel") then
-                    child.Visible = false
-                end
-            end
-
-            targetFrame.Size = UDim2.new(1, 0, 0, 120)
-            targetFrame.ClipsDescendants = true
-            targetFrame.BackgroundTransparency = 0
-            targetFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
-
-            local img = Instance.new("ImageLabel")
-            img.Name = "InjectedMapPreview_" .. slotIndex
-            img.Size = UDim2.new(1, -12, 1, -12)
-            img.Position = UDim2.new(0, 6, 0, 6)
-            img.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-            img.BorderSizePixel = 0
-            img.ScaleType = Enum.ScaleType.Crop
-            img.ZIndex = 25
-            img.Visible = false
-            img.Parent = targetFrame
-
-            local corner = Instance.new("UICorner")
-            corner.CornerRadius = UDim.new(0, 8)
-            corner.Parent = img
-
-            local placeholder = Instance.new("TextLabel")
-            placeholder.Name = "Placeholder"
-            placeholder.Size = UDim2.new(1, 0, 1, 0)
-            placeholder.BackgroundTransparency = 1
-            placeholder.Text = "КАРТА НЕ ЗАГРУЖЕНА / РАУНД ИДЁТ"
-            placeholder.TextColor3 = Color3.fromRGB(130, 130, 145)
-            placeholder.Font = Enum.Font.GothamBold
-            placeholder.TextSize = 11
-            placeholder.ZIndex = 26
-            placeholder.Visible = true
-            placeholder.Parent = targetFrame
-
-            widget.FrameInstance = targetFrame
-            widget.ImageLabel = img
-            widget.Placeholder = placeholder
-            return true
-        end
-
-        return false
+        return nil
     end
 
+    local function setupHorizontalRow()
+        local host = getHostFrame()
+        if not host then return false end
+
+        -- Скрываем стандартный текст Rayfield
+        for _, child in ipairs(host:GetChildren()) do
+            if child:IsA("TextLabel") then
+                child.Visible = false
+            end
+        end
+
+        -- Задаём размеры базового контейнера
+        host.Size = UDim2.new(1, 0, 0, 160)
+        host.ClipsDescendants = true
+        host.BackgroundTransparency = 1
+
+        -- Очищаем старые инъецированные фреймы, если модуль перезапускался
+        local oldRow = host:FindFirstChild("MapRowContainer")
+        if oldRow then oldRow:Destroy() end
+
+        local rowFrame = Instance.new("Frame")
+        rowFrame.Name = "MapRowContainer"
+        rowFrame.Size = UDim2.new(1, 0, 1, 0)
+        rowFrame.BackgroundTransparency = 1
+        rowFrame.Parent = host
+
+        -- 3 равные колонки с отступами
+        local cardPositions = {
+            UDim2.new(0, 0, 0, 0),
+            UDim2.new(0.345, 0, 0, 0),
+            UDim2.new(0.69, 0, 0, 0)
+        }
+
+        for i = 1, 3 do
+            local card = Instance.new("Frame")
+            card.Name = "CardSlot_" .. i
+            card.Size = UDim2.new(0.31, 0, 1, 0)
+            card.Position = cardPositions[i]
+            card.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+            card.BorderSizePixel = 0
+            card.Parent = rowFrame
+
+            local cardCorner = Instance.new("UICorner")
+            cardCorner.CornerRadius = UDim.new(0, 8)
+            cardCorner.Parent = card
+
+            local cardStroke = Instance.new("UIStroke")
+            cardStroke.Name = "Stroke"
+            cardStroke.Color = Color3.fromRGB(48, 48, 58)
+            cardStroke.Thickness = 1.2
+            cardStroke.Parent = card
+
+            -- Превью картинки карты (аккуратный баннер сверху)
+            local img = Instance.new("ImageLabel")
+            img.Name = "MapImage"
+            img.Size = UDim2.new(1, -8, 0, 64)
+            img.Position = UDim2.new(0, 4, 0, 4)
+            img.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
+            img.BorderSizePixel = 0
+            img.ScaleType = Enum.ScaleType.Crop
+            img.ZIndex = 15
+            img.Visible = false
+            img.Parent = card
+
+            local imgCorner = Instance.new("UICorner")
+            imgCorner.CornerRadius = UDim.new(0, 6)
+            imgCorner.Parent = img
+
+            -- Заглушка, если картинки нет
+            local placeholder = Instance.new("TextLabel")
+            placeholder.Name = "Placeholder"
+            placeholder.Size = UDim2.new(1, -8, 0, 64)
+            placeholder.Position = UDim2.new(0, 4, 0, 4)
+            placeholder.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+            placeholder.Text = "РАУНД ИДЁТ"
+            placeholder.TextColor3 = Color3.fromRGB(100, 100, 115)
+            placeholder.Font = Enum.Font.GothamBold
+            placeholder.TextSize = 9
+            placeholder.ZIndex = 14
+            placeholder.Parent = card
+
+            local phCorner = Instance.new("UICorner")
+            phCorner.CornerRadius = UDim.new(0, 6)
+            phCorner.Parent = placeholder
+
+            -- Название карты
+            local titleLbl = Instance.new("TextLabel")
+            titleLbl.Name = "TitleLabel"
+            titleLbl.Size = UDim2.new(1, -8, 0, 18)
+            titleLbl.Position = UDim2.new(0, 4, 0, 71)
+            titleLbl.BackgroundTransparency = 1
+            titleLbl.Text = "Карта #" .. i
+            titleLbl.TextColor3 = Color3.fromRGB(240, 240, 240)
+            titleLbl.Font = Enum.Font.GothamBold
+            titleLbl.TextSize = 11
+            titleLbl.TextTruncate = Enum.TextTruncate.AtEnd
+            titleLbl.TextXAlignment = Enum.TextXAlignment.Center
+            titleLbl.Parent = card
+
+            -- Счетчик голосов
+            local votesLbl = Instance.new("TextLabel")
+            votesLbl.Name = "VotesLabel"
+            votesLbl.Size = UDim2.new(1, -8, 0, 14)
+            votesLbl.Position = UDim2.new(0, 4, 0, 89)
+            votesLbl.BackgroundTransparency = 1
+            votesLbl.Text = "Голосов: 0"
+            votesLbl.TextColor3 = Color3.fromRGB(130, 180, 255)
+            votesLbl.Font = Enum.Font.Gotham
+            votesLbl.TextSize = 10
+            votesLbl.TextXAlignment = Enum.TextXAlignment.Center
+            votesLbl.Parent = card
+
+            -- Кнопка выбора/глитча карты
+            local actionBtn = Instance.new("TextButton")
+            actionBtn.Name = "ActionButton"
+            actionBtn.Size = UDim2.new(1, -8, 0, 28)
+            actionBtn.Position = UDim2.new(0, 4, 1, -33)
+            actionBtn.BackgroundColor3 = Color3.fromRGB(38, 38, 48)
+            actionBtn.Text = "ВЫБРАТЬ"
+            actionBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            actionBtn.Font = Enum.Font.GothamBold
+            actionBtn.TextSize = 11
+            actionBtn.Parent = card
+
+            local btnCorner = Instance.new("UICorner")
+            btnCorner.CornerRadius = UDim.new(0, 6)
+            btnCorner.Parent = actionBtn
+
+            actionBtn.MouseButton1Click:Connect(function()
+                startVoteGlitchLoop(i)
+            end)
+
+            HorizontalCards[i] = {
+                Card = card,
+                Stroke = cardStroke,
+                Image = img,
+                Placeholder = placeholder,
+                Title = titleLbl,
+                Votes = votesLbl,
+                Button = actionBtn,
+                LastImage = "",
+                LastTitle = "",
+                LastVotes = -1,
+                LastState = nil
+            }
+        end
+
+        return true
+    end
+
+    task.spawn(function()
+        for _ = 1, 15 do
+            if setupHorizontalRow() then break end
+            task.wait(0.3)
+        end
+    end)
+
     -- ==========================================
-    -- ОПТИМИЗИРОВАННЫЙ ЦИКЛ ОБНОВЛЕНИЯ (0.4 СЕК)
+    -- ЦИКЛ ОБНОВЛЕНИЯ ДАННЫХ (0.4 СЕК)
     -- ==========================================
     local lastStatusText = ""
 
     task.spawn(function()
         while task.wait(0.4) do
+            if not HorizontalCards[1] then
+                setupHorizontalRow()
+            end
+
             local anyVoteActive = false
 
             for i = 1, 3 do
-                local widget = MapWidgets[i]
-
-                if not widget.ImageLabel then
-                    attachImageToParagraph(i)
-                end
-
                 local mName, vCount, mImg, isCardActive = getVoteCardData(i)
                 if isCardActive then anyVoteActive = true end
 
-                -- 1. Обновление картинки в виджете
-                if widget.ImageLabel then
+                local cardUI = HorizontalCards[i]
+                if cardUI then
+                    -- 1. Картинка
                     if isValidVoteImage(mImg) then
-                        if widget.LastImage ~= mImg then
-                            widget.ImageLabel.Image = mImg
-                            widget.ImageLabel.Visible = true
-                            widget.LastImage = mImg
-                            if widget.Placeholder then widget.Placeholder.Visible = false end
+                        if cardUI.LastImage ~= mImg then
+                            cardUI.Image.Image = mImg
+                            cardUI.Image.Visible = true
+                            cardUI.Placeholder.Visible = false
+                            cardUI.LastImage = mImg
                         end
                     else
-                        if widget.ImageLabel.Visible then
-                            widget.ImageLabel.Image = ""
-                            widget.ImageLabel.Visible = false
-                            widget.LastImage = ""
-                            if widget.Placeholder then widget.Placeholder.Visible = true end
+                        if cardUI.Image.Visible then
+                            cardUI.Image.Image = ""
+                            cardUI.Image.Visible = false
+                            cardUI.Placeholder.Visible = true
+                            cardUI.LastImage = ""
                         end
                     end
-                end
 
-                -- 2. Обновление кнопки
-                local prefix = ""
-                if IsGlitchingVote and TargetVoteIndex == i then
-                    prefix = "[ФАРМИТСЯ] "
-                elseif not isCardActive then
-                    prefix = "[ЗАКРЫТО] "
-                end
+                    -- 2. Название
+                    local cleanName = (mName ~= "" and mName ~= "MapName") and mName or ("Карта " .. i)
+                    if cardUI.LastTitle ~= cleanName then
+                        cardUI.Title.Text = cleanName
+                        cardUI.LastTitle = cleanName
+                    end
 
-                local cleanName = (mName ~= "" and mName ~= "MapName") and mName or ("Карта " .. i)
-                local newBtnText = string.format("%s%s  (Голосов: %d)", prefix, cleanName, vCount)
+                    -- 3. Голоса
+                    if cardUI.LastVotes ~= vCount then
+                        cardUI.Votes.Text = "Голосов: " .. tostring(vCount)
+                        cardUI.LastVotes = vCount
+                    end
 
-                if widget.LastText ~= newBtnText then
-                    widget.LastText = newBtnText
-                    if widget.ButtonObj and widget.ButtonObj.Set then
-                        widget.ButtonObj:Set(newBtnText)
+                    -- 4. Статус кнопки и карточки
+                    local stateKey = (IsGlitchingVote and TargetVoteIndex == i and "FARM")
+                        or (isCardActive and "READY")
+                        or "CLOSED"
+
+                    if cardUI.LastState ~= stateKey then
+                        cardUI.LastState = stateKey
+
+                        if stateKey == "FARM" then
+                            cardUI.Card.BackgroundColor3 = Color3.fromRGB(20, 60, 32)
+                            cardUI.Stroke.Color = Color3.fromRGB(50, 220, 100)
+                            cardUI.Button.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+                            cardUI.Button.Text = "ФАРМ..."
+                            cardUI.Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+                        elseif stateKey == "READY" then
+                            cardUI.Card.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+                            cardUI.Stroke.Color = Color3.fromRGB(48, 48, 58)
+                            cardUI.Button.BackgroundColor3 = Color3.fromRGB(38, 38, 48)
+                            cardUI.Button.Text = "ВЫБРАТЬ"
+                            cardUI.Button.TextColor3 = Color3.fromRGB(240, 240, 240)
+                        else
+                            cardUI.Card.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+                            cardUI.Stroke.Color = Color3.fromRGB(36, 36, 42)
+                            cardUI.Button.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+                            cardUI.Button.Text = "ЗАКРЫТО"
+                            cardUI.Button.TextColor3 = Color3.fromRGB(110, 110, 120)
+                        end
                     end
                 end
             end
 
-            -- 3. Обновление статуса
+            -- 5. Верхний статус
             local newStatusTitle = ""
             local newStatusContent = ""
 
             if IsGlitchingVote then
                 local aName = getVoteCardData(TargetVoteIndex)
                 newStatusTitle = "Фарм Активен!"
-                newStatusContent = string.format("Выбрана карта: %s\nЦикл: ТП -> 0.8с -> Ресет", tostring(aName))
+                newStatusContent = string.format("Карта: %s (ТП -> 0.8с -> Ресет)", tostring(aName))
             elseif anyVoteActive then
                 newStatusTitle = "Идёт голосование"
-                newStatusContent = "Картинки карт отображаются. Нажмите кнопку под нужной картой."
+                newStatusContent = "Картинки карт доступны. Нажмите «ВЫБРАТЬ» под нужной картой."
             else
                 newStatusTitle = "Раунд начался"
-                newStatusContent = "Голосование недоступно (картинок нет). Фарм заблокирован."
+                newStatusContent = "Голосование закрыто (картинки отсутствуют). Фарм заблокирован."
             end
 
             local combined = newStatusTitle .. newStatusContent
