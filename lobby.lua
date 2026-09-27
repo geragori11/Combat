@@ -1,6 +1,6 @@
 -- =========================================================================
--- XCLIENT MODULE: OPTIMIZED MM2 VOTING TAB (ZERO-LAG + FIXED IMAGES)
--- Формат внешнего подключаемого модуля (как player.lua / combat.lua)
+-- XCLIENT MODULE: MM2 VOTING TAB (PARAGRAPH IMAGE WIDGETS + ZERO-LAG)
+-- Внешний модуль для меню XClient / Rayfield
 -- =========================================================================
 
 return function(Window)
@@ -133,7 +133,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- УПРАВЛЕНИЕ ГЛИТЧЕМ
+    -- УПРАВЛЕНИЕ ГЛИТЧЕМ (0.8с -> Ресет)
     -- ==========================================
     local function stopVoteGlitch(reason)
         if not IsGlitchingVote and not CurrentVoteThread then return end
@@ -155,7 +155,7 @@ return function(Window)
     local function startVoteGlitchLoop(index)
         local mapName, _, mapImage, isVoting = getVoteCardData(index)
         if not isVoting or not isValidVoteImage(mapImage) then
-            Notify("Заблокировано", "Картинка отсутствует! Раунд уже начался или идёт.", 3.5)
+            Notify("Заблокировано", "Картинка карты не загружена! Раунд уже начался или идёт.", 3.5)
             return
         end
 
@@ -199,6 +199,7 @@ return function(Window)
                     break
                 end
 
+                -- Телепортация на детектор
                 hrp.CFrame = targetPart.CFrame + Vector3.new(0, 2.2, 0)
                 pcall(function()
                     if typeof(firetouchinterest) == "function" then
@@ -206,6 +207,7 @@ return function(Window)
                     end
                 end)
 
+                -- Ожидание ровно 0.8с
                 local timer = 0
                 while timer < 0.8 and IsGlitchingVote do
                     task.wait(0.05)
@@ -218,6 +220,7 @@ return function(Window)
                 end
                 if not IsGlitchingVote then break end
 
+                -- Ресет
                 pcall(function() hum.Health = 0 end)
                 pcall(function() char:BreakJoints() end)
 
@@ -232,39 +235,12 @@ return function(Window)
     -- ==========================================
     -- ИНТЕРФЕЙС ВКЛАДКИ
     -- ==========================================
-    VotingTab:CreateSection("Статус Голосования")
+    VotingTab:CreateSection("Инфо")
 
     local VoteStatusParagraph = VotingTab:CreateParagraph({
         Title = "Статус системы",
         Content = "Ожидание раунда голосования..."
     })
-
-    VotingTab:CreateSection("Выбор Карты (Нажмите для фарма)")
-
-    local ButtonWidgets = {}
-    local UniqueTags = {
-        "__XC_VOTE_SLOT_1__",
-        "__XC_VOTE_SLOT_2__",
-        "__XC_VOTE_SLOT_3__"
-    }
-
-    for i = 1, 3 do
-        local btn = VotingTab:CreateButton({
-            Name = UniqueTags[i],
-            Callback = function()
-                startVoteGlitchLoop(i)
-            end
-        })
-        ButtonWidgets[i] = {
-            ButtonInstance = btn,
-            TextLabel = nil,
-            ImageLabel = nil,
-            LastText = "",
-            LastImage = ""
-        }
-    end
-
-    VotingTab:CreateSection("Управление")
 
     VotingTab:CreateButton({
         Name = "🛑 ОСТАНОВИТЬ ФАРМ",
@@ -273,10 +249,44 @@ return function(Window)
         end
     })
 
+    -- Карточки карт
+    local MapWidgets = {}
+    local UniqueSlotTags = {
+        "__RAYFIELD_MAP_IMG_1__",
+        "__RAYFIELD_MAP_IMG_2__",
+        "__RAYFIELD_MAP_IMG_3__"
+    }
+
+    for i = 1, 3 do
+        VotingTab:CreateSection("Слот карты #" .. i)
+
+        -- Параграф-контейнер под картинку
+        VotingTab:CreateParagraph({
+            Title = UniqueSlotTags[i],
+            Content = ""
+        })
+
+        -- Кнопка выбора карты
+        local btn = VotingTab:CreateButton({
+            Name = string.format("Выбрать Карту %d (Ожидание)", i),
+            Callback = function()
+                startVoteGlitchLoop(i)
+            end
+        })
+
+        MapWidgets[i] = {
+            Button = btn,
+            ImageLabel = nil,
+            PlaceholderLabel = nil,
+            LastImage = "",
+            LastText = ""
+        }
+    end
+
     -- ==========================================
-    -- ОДНОКРАТНАЯ ИНЪЕКЦИЯ С ПРЯМЫМ КЭШИРОВАНИЕМ
+    -- ИНЪЕКЦИЯ IMAGELABEL В ПАРАГРАФЫ RAYFIELD
     -- ==========================================
-    local function getGuiContainer()
+    local function getGuiRoot()
         if CoreGui:FindFirstChild("Rayfield") then return CoreGui.Rayfield end
         if CoreGui:FindFirstChild("XClient") then return CoreGui.XClient end
         if LocalPlayer:FindFirstChild("PlayerGui") then
@@ -291,77 +301,103 @@ return function(Window)
         return nil
     end
 
-    local injectionDone = false
-    local function setupInjectedButtons()
-        if injectionDone then return true end
+    local injectionFinished = false
 
-        local gui = getGuiContainer()
-        if not gui then return false end
+    local function setupParagraphImages()
+        if injectionFinished then return true end
 
-        local foundCount = 0
+        local guiRoot = getGuiRoot()
+        if not guiRoot then return false end
+
+        local readyCount = 0
+
         for i = 1, 3 do
-            if not ButtonWidgets[i].TextLabel then
-                for _, desc in ipairs(gui:GetDescendants()) do
-                    if desc:IsA("TextLabel") and desc.Text == UniqueTags[i] then
-                        local btnContainer = desc.Parent
-                        if btnContainer then
-                            desc.Text = string.format("Карта %d (Ожидание...)", i)
-                            desc.Position = UDim2.new(0, 46, 0, 0)
-                            desc.Size = UDim2.new(1, -52, 1, 0)
-                            desc.TextXAlignment = Enum.TextXAlignment.Left
-                            desc.TextTruncate = Enum.TextTruncate.AtEnd
+            if not MapWidgets[i].ImageLabel then
+                for _, desc in ipairs(guiRoot:GetDescendants()) do
+                    if desc:IsA("TextLabel") and desc.Text == UniqueSlotTags[i] then
+                        local paragraphFrame = desc.Parent
+                        if paragraphFrame then
+                            -- Очищаем текстовые поля параграфа
+                            desc.Text = ""
+                            desc.Visible = false
 
-                            local preview = Instance.new("ImageLabel")
-                            preview.Name = "MapIconPreview_" .. i
-                            preview.Size = UDim2.new(0, 32, 0, 32)
-                            preview.Position = UDim2.new(0, 7, 0.5, -16)
-                            preview.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
-                            preview.BorderSizePixel = 0
-                            preview.BackgroundTransparency = 0
-                            preview.ZIndex = 25
-                            preview.ScaleType = Enum.ScaleType.Crop
-                            preview.Visible = false
-                            preview.Parent = btnContainer
+                            local content = paragraphFrame:FindFirstChild("Content") or paragraphFrame:FindFirstChildWhichIsA("TextLabel")
+                            if content and content ~= desc then
+                                content.Text = ""
+                                content.Visible = false
+                            end
+
+                            -- Задаём фиксированный размер параграфа для баннера карты
+                            paragraphFrame.Size = UDim2.new(1, 0, 0, 120)
+                            paragraphFrame.ClipsDescendants = true
+                            paragraphFrame.BackgroundTransparency = 0
+                            paragraphFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+
+                            -- Создаём сам ImageLabel внутри контейнера
+                            local imgLabel = Instance.new("ImageLabel")
+                            imgLabel.Name = "MapBannerImage"
+                            imgLabel.Size = UDim2.new(1, -12, 1, -12)
+                            imgLabel.Position = UDim2.new(0, 6, 0, 6)
+                            imgLabel.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+                            imgLabel.BorderSizePixel = 0
+                            imgLabel.ScaleType = Enum.ScaleType.Crop
+                            imgLabel.ZIndex = 10
+                            imgLabel.Visible = false
+                            imgLabel.Parent = paragraphFrame
 
                             local corner = Instance.new("UICorner")
-                            corner.CornerRadius = UDim.new(0, 6)
-                            corner.Parent = preview
+                            corner.CornerRadius = UDim.new(0, 8)
+                            corner.Parent = imgLabel
 
-                            ButtonWidgets[i].TextLabel = desc
-                            ButtonWidgets[i].ImageLabel = preview
-                            foundCount = foundCount + 1
+                            -- Текст-заглушка, когда картинка не загружена
+                            local placeholder = Instance.new("TextLabel")
+                            placeholder.Name = "PlaceholderText"
+                            placeholder.Size = UDim2.new(1, 0, 1, 0)
+                            placeholder.BackgroundTransparency = 1
+                            placeholder.Text = "РАУНД ИДЁТ / КАРТА НЕ ЗАГРУЖЕНА"
+                            placeholder.TextColor3 = Color3.fromRGB(120, 120, 135)
+                            placeholder.Font = Enum.Font.GothamBold
+                            placeholder.TextSize = 11
+                            placeholder.ZIndex = 11
+                            placeholder.Visible = true
+                            placeholder.Parent = paragraphFrame
+
+                            MapWidgets[i].ImageLabel = imgLabel
+                            MapWidgets[i].PlaceholderLabel = placeholder
+                            readyCount = readyCount + 1
                             break
                         end
                     end
                 end
             else
-                foundCount = foundCount + 1
+                readyCount = readyCount + 1
             end
         end
 
-        if foundCount == 3 then
-            injectionDone = true
+        if readyCount == 3 then
+            injectionFinished = true
             return true
         end
         return false
     end
 
+    -- Однократный фоновый запуск инъекции
     task.spawn(function()
-        for _ = 1, 10 do
-            if setupInjectedButtons() then break end
-            task.wait(0.5)
+        for _ = 1, 15 do
+            if setupParagraphImages() then break end
+            task.wait(0.4)
         end
     end)
 
     -- ==========================================
-    -- ОПТИМИЗИРОВАННЫЙ ЦИКЛ ОБНОВЛЕНИЯ (БЕЗ ЛАГОВ)
+    -- ЛЁГКИЙ ЦИКЛ ОБНОВЛЕНИЯ (БЕЗ НАГРУЗКИ НА CPU)
     -- ==========================================
     local lastStatusText = ""
 
     task.spawn(function()
-        while task.wait(0.4) do
-            if not injectionDone then
-                setupInjectedButtons()
+        while task.wait(0.5) do
+            if not injectionFinished then
+                setupParagraphImages()
             end
 
             local anyVoteActive = false
@@ -370,26 +406,28 @@ return function(Window)
                 local mName, vCount, mImg, isCardActive = getVoteCardData(i)
                 if isCardActive then anyVoteActive = true end
 
-                local widget = ButtonWidgets[i]
+                local widget = MapWidgets[i]
 
-                -- 1. Обновление изображения
+                -- 1. Обновление картинки в виджете-параграфе
                 if widget.ImageLabel then
                     if isValidVoteImage(mImg) then
                         if widget.LastImage ~= mImg then
                             widget.ImageLabel.Image = mImg
                             widget.ImageLabel.Visible = true
                             widget.LastImage = mImg
+                            if widget.PlaceholderLabel then widget.PlaceholderLabel.Visible = false end
                         end
                     else
                         if widget.ImageLabel.Visible then
                             widget.ImageLabel.Image = ""
                             widget.ImageLabel.Visible = false
                             widget.LastImage = ""
+                            if widget.PlaceholderLabel then widget.PlaceholderLabel.Visible = true end
                         end
                     end
                 end
 
-                -- 2. Обновление текста
+                -- 2. Обновление текста на кнопке выбора
                 local prefix = ""
                 if IsGlitchingVote and TargetVoteIndex == i then
                     prefix = "[ФАРМИТСЯ] "
@@ -398,19 +436,17 @@ return function(Window)
                 end
 
                 local cleanName = (mName ~= "" and mName ~= "MapName") and mName or ("Карта " .. i)
-                local newButtonText = string.format("%s%s  (Голосов: %d)", prefix, cleanName, vCount)
+                local newBtnText = string.format("%s%s  (Голосов: %d)", prefix, cleanName, vCount)
 
-                if widget.LastText ~= newButtonText then
-                    widget.LastText = newButtonText
-                    if widget.TextLabel then
-                        widget.TextLabel.Text = newButtonText
-                    elseif widget.ButtonInstance and widget.ButtonInstance.Set then
-                        widget.ButtonInstance:Set(newButtonText)
+                if widget.LastText ~= newBtnText then
+                    widget.LastText = newBtnText
+                    if widget.Button and widget.Button.Set then
+                        widget.Button:Set(newBtnText)
                     end
                 end
             end
 
-            -- 3. Обновление параграфа статуса
+            -- 3. Обновление статуса
             local newStatusTitle = ""
             local newStatusContent = ""
 
@@ -420,15 +456,15 @@ return function(Window)
                 newStatusContent = string.format("Выбрана карта: %s\nЦикл: ТП -> 0.8с -> Ресет", tostring(aName))
             elseif anyVoteActive then
                 newStatusTitle = "Идёт голосование"
-                newStatusContent = "Картинки карт загружены. Нажмите на карту для запуска глитча."
+                newStatusContent = "Картинки карт отображаются. Нажмите кнопку под нужной картой."
             else
                 newStatusTitle = "Раунд начался"
-                newStatusContent = "Голосование недоступно (картинки отсутствуют). Фарм заблокирован."
+                newStatusContent = "Голосование недоступно (картинок нет). Фарм заблокирован."
             end
 
-            local combinedStatus = newStatusTitle .. newStatusContent
-            if lastStatusText ~= combinedStatus then
-                lastStatusText = combinedStatus
+            local combined = newStatusTitle .. newStatusContent
+            if lastStatusText ~= combined then
+                lastStatusText = combined
                 if VoteStatusParagraph and VoteStatusParagraph.Set then
                     VoteStatusParagraph:Set({
                         Title = newStatusTitle,
