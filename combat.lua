@@ -1,6 +1,12 @@
 -- =========================================================================
 -- Murder Mystery 2: Auto-Shoot + HvH Mode + Murderer/Sheriff Exploits
--- + Remote Kill Spoof + Kill All Except Sheriff + Knife Aura
+-- + Remote Kill Spoof (+ Silent) + Kill All Except Sheriff + Knife Aura
+-- =========================================================================
+-- ЛОГИКА:
+--   • Auto-Shoot (мастер) ВКЛ  →  клавиша R заблокирована, работает только
+--                                слайдер "Aim" (0/1). Aim=1 → автоприцел вкл.
+--   • Auto-Shoot (мастер) ВЫКЛ →  клавиша R делает одиночный выстрел.
+--   • Silent (0/1) для килл-эксплойтов: нож достаётся → сигнал → нож убирается.
 -- =========================================================================
 
 return function(Window)
@@ -11,8 +17,9 @@ return function(Window)
 
     local CombatTab = Window:CreateTab("COMBAT", 4483362458)
 
-    -- --- НАСТРОЙКИ АВТОВЫСТРЕЛА ---
-    local AutoShootEnabled = false
+    -- --- АВТОВЫСТРЕЛ ---
+    local AutoShootEnabled = false        -- мастер-тумблер
+    local AimEnabled = false              -- слайдер "Aim" (0/1): реально целится
     local AutoShootEquip = true
     local IsShooting = false
     local shootOffset = 2.1
@@ -20,23 +27,24 @@ return function(Window)
     local referenceDistance = 30
     local shootCooldown = 1.5
 
-    -- --- НАСТРОЙКИ HvH РЕЖИМА ---
+    -- --- HvH ---
     local HvHMode = false
     local HvHMaxDistance = 50
     local HvHRequireVisible = true
-    local HvHShootCooldown = 0.25       -- ОТДЕЛЬНЫЙ кулдаун для HvH (быстрый!)
+    local HvHShootCooldown = 0.25
 
-    -- --- НАСТРОЙКИ KNIFE AURA ---
+    -- --- KNIFE AURA ---
     local KnifeAuraEnabled = false
     local KnifeAuraRange = 30
     local KnifeAuraCooldown = 1.2
     local KnifeAuraNextUse = 0
 
-    -- --- СОСТОЯНИЕ EXPLOITS ---
+    -- --- EXPLOITS ---
     local isKillingAll = false
     local isKillingSheriff = false
     local isKillingTarget = false
     local SelectedPlayerName = ""
+    local silentKill = false              -- слайдер "Silent" (0/1)
 
     local function Notify(Title, Text)
         pcall(function()
@@ -153,33 +161,45 @@ return function(Window)
         return nil
     end
 
-    local function getEquippedKnife()
+    -- Нож БЕЗ авто-экипировки (нужно для Silent)
+    local function getKnifeAnywhere()
         local char = LocalPlayer.Character
         if not char then return nil end
         local knife = char:FindFirstChild("Knife")
         if knife then return knife end
-
         local backpack = LocalPlayer:FindFirstChild("Backpack")
-        local bagKnife = backpack and backpack:FindFirstChild("Knife")
-        if bagKnife then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then hum:EquipTool(bagKnife) end
-            return bagKnife
+        if backpack then
+            return backpack:FindFirstChild("Knife")
         end
         return nil
     end
 
     -- ==========================================
-    -- 5. REMOTE KILL SPOOF
+    -- 5. REMOTE KILL SPOOF (с поддержкой Silent)
+    --    Silent = достал нож → сигнал → убрал нож
     -- ==========================================
-    local function spoofKill(targetPlayer, knife)
+    local function spoofKill(targetPlayer, knife, silent)
         if not targetPlayer or not targetPlayer.Character then return false end
         local victimChar = targetPlayer.Character
         local victimHum = victimChar:FindFirstChildOfClass("Humanoid")
         if not victimHum or victimHum.Health <= 0 then return false end
 
-        knife = knife or getEquippedKnife()
+        knife = knife or getKnifeAnywhere()
         if not knife then return false end
+
+        local myChar = LocalPlayer.Character
+        local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+        local wasEquipped = (knife.Parent == myChar)
+
+        -- Silent: достаём нож на мгновение (если ещё не в руках)
+        if silent and hum and not wasEquipped then
+            pcall(function() hum:EquipTool(knife) end)
+            task.wait(0.03)
+        elseif not wasEquipped and hum then
+            -- Обычный режим — тоже гарантируем экип (нужно для серверных проверок)
+            pcall(function() hum:EquipTool(knife) end)
+            task.wait(0.02)
+        end
 
         local events = knife:FindFirstChild("Events")
         if not events then return false end
@@ -210,24 +230,28 @@ return function(Window)
             pcall(function() handleTouched:FireServer(part) end)
         end
 
+        -- Silent: сразу убираем нож
+        if silent and hum and not wasEquipped then
+            pcall(function() hum:UnequipTools() end)
+        end
+
         return true
     end
 
     local function spoofKillBurst(targetList)
-        local knife = getEquippedKnife()
+        local knife = getKnifeAnywhere()
         if not knife then return 0 end
         for _, player in ipairs(targetList) do
             task.spawn(function()
                 task.wait(math.random() * 0.01)
-                spoofKill(player, knife)
+                spoofKill(player, knife, silentKill)
             end)
         end
         return #targetList
     end
 
     -- ==========================================
-    -- 6. BULLET-AT-HITBOX — БЕЗ ЗАДЕРЖЕК
-    --    Все выстрелы в одном тике (0 мс).
+    -- 6. BULLET-AT-HITBOX
     -- ==========================================
     local function fireBulletAtTarget(targetCharacter, gun)
         if not targetCharacter or not gun then return end
@@ -245,8 +269,6 @@ return function(Window)
         pcall(function() ping = LocalPlayer:GetNetworkPing() end)
         ping = math.clamp(ping, 0, 0.5)
 
-        -- Порядок важен: Head первым — если первая пуля убьёт, остальные уже не нужны,
-        -- но они всё равно уйдут в одном тике, поэтому ждать нечего.
         local bodyParts = {}
         for _, name in ipairs({
             "Head", "UpperTorso", "Torso", "LowerTorso",
@@ -270,7 +292,6 @@ return function(Window)
         local spawnDir = (speed > 3) and -velocity.Unit or mRoot.CFrame.LookVector
         local spawnDist = math.clamp(2 - speed * 0.02, 0.4, 2)
 
-        -- БЕЗ task.wait — все выстрелы одним пакетом
         for _, part in ipairs(bodyParts) do
             local predictedPos = part.Position + velocity * ping
             local originCFrame = CFrame.new(predictedPos + spawnDir * spawnDist)
@@ -283,13 +304,13 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 7. KNIFE THROW HvH (тоже без задержек)
+    -- 7. KNIFE THROW HvH
     -- ==========================================
     local function fireKnifeThrowAt(targetCharacter, spawnDist)
         if not targetCharacter then return false end
         spawnDist = spawnDist or 0.2
 
-        local knife = getEquippedKnife()
+        local knife = getKnifeAnywhere()
         if not knife then return false end
 
         local events = knife:FindFirstChild("Events")
@@ -338,7 +359,41 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 8. HvH AUTO-AIM
+    -- 8. MANUAL SHOT (для R, когда AutoShoot выкл)
+    -- ==========================================
+    local function manualShot()
+        local char = LocalPlayer.Character
+        if not char then return end
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then return end
+
+        local gun = getEquippedGun()
+        if not gun then Notify("Auto-Shoot", "Пистолет не найден") return end
+
+        local murderer = findMurderer()
+        if not murderer or not murderer.Character then
+            Notify("Auto-Shoot", "Мардер не найден")
+            return
+        end
+
+        local visiblePart = getVisiblePart(murderer.Character)
+        if not visiblePart then return end
+
+        local predictedPosition = getPredictedPosition(visiblePart, char, shootOffset)
+        local args = {
+            CFrame.new(char.RightHand.Position),
+            CFrame.new(predictedPosition)
+        }
+
+        if gun:FindFirstChild("Shoot") then
+            gun.Shoot:FireServer(unpack(args))
+        elseif gun:FindFirstChild("KnifeLocal") and gun.KnifeLocal:FindFirstChild("CreateBeam") then
+            gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, predictedPosition, "AH2")
+        end
+    end
+
+    -- ==========================================
+    -- 9. HvH AUTO-AIM
     -- ==========================================
     local function tryHvHShot(targetChar, gun)
         if not HvHMode or not targetChar or not gun then return false end
@@ -361,28 +416,46 @@ return function(Window)
     end
 
     -- ==========================================
-    -- СОЗДАНИЕ UI
+    -- UI
     -- ==========================================
-    CombatTab:CreateSection("Auto-Shoot (Автовыстрел по Мардеру)")
+    CombatTab:CreateSection("Auto-Shoot")
 
     CombatTab:CreateToggle({
-        Name = "Включить Автовыстрел",
+        Name = "Включить Автовыстрел (мастер)",
         CurrentValue = false,
         Flag = "AutoShootMasterToggle",
         Callback = function(Value)
             AutoShootEnabled = Value
-            if not Value then IsShooting = false end
+            if not Value then
+                -- при выключении мастера сбрасываем Aim
+                AimEnabled = false
+                IsShooting = false
+            end
+        end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Aim (0 = выкл, 1 = вкл)",
+        Range = {0, 1}, Increment = 1, CurrentValue = 0,
+        Flag = "AimSlider",
+        Callback = function(Value)
+            AimEnabled = (Value == 1)
         end
     })
 
     CombatTab:CreateKeybind({
-        Name = "Клавиша вкл/выкл (по умолчанию R)",
+        Name = "Клавиша выстрела (R)",
         CurrentKeybind = "R",
         HoldToInteract = false,
-        Flag = "AutoShootKeybind",
+        Flag = "ShootKeybind",
         Callback = function()
-            AutoShootEnabled = not AutoShootEnabled
-            Notify("Автовыстрел (R)", AutoShootEnabled and "ВКЛЮЧЕН" or "ВЫКЛЮЧЕН")
+            -- Если Автовыстрел ВКЛ → R заблокирован
+            if AutoShootEnabled then
+                Notify("Auto-Shoot", "R заблокирован: включён Автовыстрел. Используй слайдер Aim.")
+                return
+            end
+            -- Иначе — одиночный выстрел
+            manualShot()
         end
     })
 
@@ -458,11 +531,20 @@ return function(Window)
     -- ==========================================
     CombatTab:CreateSection("Murderer Exploits (Remote Spoof)")
 
+    CombatTab:CreateSlider({
+        Name = "Silent (0 = выкл, 1 = вкл) — тихое убийство",
+        Range = {0, 1}, Increment = 1, CurrentValue = 0,
+        Flag = "SilentKillSlider",
+        Callback = function(Value)
+            silentKill = (Value == 1)
+        end
+    })
+
     CombatTab:CreateButton({
         Name = "Убить всех (Remote Spoof)",
         Callback = function()
             if isKillingAll then return end
-            local knife = getEquippedKnife()
+            local knife = getKnifeAnywhere()
             if not knife then Notify("MM2 Exploit", "Вы не Мардер!") return end
             isKillingAll = true
             local targets = {}
@@ -481,7 +563,7 @@ return function(Window)
         Name = "Убить всех кроме Шерифа",
         Callback = function()
             if isKillingAll then return end
-            local knife = getEquippedKnife()
+            local knife = getKnifeAnywhere()
             if not knife then Notify("MM2 Exploit", "Вы не Мардер!") return end
             isKillingAll = true
             local targets = {}
@@ -501,7 +583,7 @@ return function(Window)
         Name = "Убить Шерифа (Remote Spoof)",
         Callback = function()
             if isKillingSheriff then return end
-            local knife = getEquippedKnife()
+            local knife = getKnifeAnywhere()
             if not knife then Notify("MM2 Exploit", "Вы не Мардер!") return end
 
             local targetSheriff = nil
@@ -516,7 +598,7 @@ return function(Window)
 
             isKillingSheriff = true
             for round = 1, 5 do
-                task.spawn(function() spoofKill(targetSheriff, knife) end)
+                task.spawn(function() spoofKill(targetSheriff, knife, silentKill) end)
                 task.wait(0.04)
                 local hum = targetSheriff.Character and targetSheriff.Character:FindFirstChildOfClass("Humanoid")
                 if not hum or hum.Health <= 0 then break end
@@ -550,7 +632,7 @@ return function(Window)
         Name = "Убить выбранного игрока (Remote Spoof)",
         Callback = function()
             if isKillingTarget or SelectedPlayerName == "" then return end
-            local knife = getEquippedKnife()
+            local knife = getKnifeAnywhere()
             if not knife then Notify("MM2 Exploit", "Вы не Мардер!") return end
 
             local targetPlayer = Players:FindFirstChild(SelectedPlayerName)
@@ -564,7 +646,7 @@ return function(Window)
 
             isKillingTarget = true
             for round = 1, 5 do
-                task.spawn(function() spoofKill(targetPlayer, knife) end)
+                task.spawn(function() spoofKill(targetPlayer, knife, silentKill) end)
                 task.wait(0.04)
                 local h = targetPlayer.Character and targetPlayer.Character:FindFirstChildOfClass("Humanoid")
                 if not h or h.Health <= 0 then break end
@@ -629,7 +711,6 @@ return function(Window)
                 return
             end
 
-            -- Двойной залп без задержки
             fireBulletAtTarget(murderer.Character, gun)
             task.delay(0.1, function()
                 local mChar = murderer.Character
@@ -678,8 +759,8 @@ return function(Window)
             end
         end
 
-        -- Auto-Shoot
-        if not AutoShootEnabled or IsShooting then return end
+        -- Auto-Shoot: мастер + Aim должны быть включены
+        if not AutoShootEnabled or not AimEnabled or IsShooting then return end
 
         local murderer = findMurderer()
         if not murderer or not murderer.Character then return end
