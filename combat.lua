@@ -1,6 +1,7 @@
 -- =========================================================================
 -- Murder Mystery 2: Auto-Shoot + Manual Shoot (R) + HvH Mode
 -- + Murderer/Sheriff Exploits + Remote Kill Spoof + Silent Kill + Knife Aura
+-- + Proxy Knife Throw (Бросок ножа от лица другого игрока)
 -- =========================================================================
 
 return function(Window)
@@ -33,6 +34,14 @@ return function(Window)
     local KnifeAuraCooldown = 1.2
     local KnifeAuraNextUse = 0
 
+    -- --- НАСТРОЙКИ PROXY KNIFE THROW (БРОСОК ОТ ЛИЦА ДРУГОГО ИГРОКА) ---
+    local ProxyAuraEnabled = false
+    local ProxyPlayerName = ""
+    local ProxyAuraRange = 60
+    local ProxyAuraCooldown = 0.8
+    local ProxyAuraNextUse = 0
+    local isProxyBursting = false
+
     -- --- НАСТРОЙКИ И СОСТОЯНИЕ EXPLOITS (МАРДЕР) ---
     local SilentKillEnabled = true
     local SilentKillDelay = 0.02
@@ -44,7 +53,7 @@ return function(Window)
     local function Notify(Title, Text)
         pcall(function()
             StarterGui:SetCore("SendNotification", {
-                Title = Title or "Auto-Shoot",
+                Title = Title or "Combat",
                 Text = Text or "",
                 Duration = 2
             })
@@ -381,7 +390,6 @@ return function(Window)
         return true
     end
 
-    -- Выстрел пулей в спину/хитбокс с авто-экипировкой и двойным залпом (как в "Убить Мардера")
     local function executeHitboxKill(targetCharacter, allowAutoEquip)
         local char = LocalPlayer.Character
         if not char or not targetCharacter then return false end
@@ -407,7 +415,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 7. KNIFE THROW HvH (тоже без задержек)
+    -- 7. KNIFE THROW HvH & PROXY THROW
     -- ==========================================
     local function fireKnifeThrowAt(targetCharacter, spawnDist)
         if not targetCharacter then return false end
@@ -453,6 +461,61 @@ return function(Window)
             local originPos = predictedPos + dir * spawnDist
             local originCFrame = CFrame.new(originPos, predictedPos)
             local targetCFrame = CFrame.new(predictedPos)
+            pcall(function()
+                knifeThrown:FireServer(originCFrame, targetCFrame)
+            end)
+        end
+
+        return true
+    end
+
+    -- Бросок ножа от лица другого игрока (Proxy Throw)
+    local function fireKnifeThrowFromProxy(proxyCharacter, targetCharacter)
+        if not proxyCharacter or not targetCharacter then return false end
+
+        local knife = getEquippedKnife()
+        if not knife then return false end
+
+        local events = knife:FindFirstChild("Events")
+        if not events then return false end
+        local knifeThrown = events:FindFirstChild("KnifeThrown")
+        if not knifeThrown then return false end
+
+        local pRoot = proxyCharacter:FindFirstChild("HumanoidRootPart") or proxyCharacter:FindFirstChild("Head")
+        local tRoot = targetCharacter:FindFirstChild("HumanoidRootPart") or targetCharacter:FindFirstChild("Head")
+        if not pRoot or not tRoot then return false end
+
+        local targetHum = targetCharacter:FindFirstChildOfClass("Humanoid")
+        if not targetHum or targetHum.Health <= 0 then return false end
+
+        local targetVelocity = tRoot.AssemblyLinearVelocity
+        local ping = 0
+        pcall(function() ping = LocalPlayer:GetNetworkPing() end)
+        ping = math.clamp(ping, 0, 0.4)
+
+        -- Точка старта ножа: прямо перед лицом/грудью выбранного прокси-игрока
+        local proxyForward = proxyCharacter:FindFirstChild("HumanoidRootPart") and proxyCharacter.HumanoidRootPart.CFrame.LookVector or Vector3.new(0, 0, -1)
+        local proxyOrigin = pRoot.Position + (proxyForward * 1.5)
+
+        local parts = {}
+        for _, name in ipairs({"Head", "UpperTorso", "Torso", "LowerTorso"}) do
+            local p = targetCharacter:FindFirstChild(name)
+            if p and p:IsA("BasePart") then table.insert(parts, p) end
+        end
+        if #parts == 0 then
+            for _, d in ipairs(targetCharacter:GetDescendants()) do
+                if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+                    table.insert(parts, d)
+                end
+            end
+        end
+        if #parts == 0 then return false end
+
+        for _, part in ipairs(parts) do
+            local predictedPos = part.Position + (targetVelocity * ping)
+            local originCFrame = CFrame.new(proxyOrigin, predictedPos)
+            local targetCFrame = CFrame.new(predictedPos)
+
             pcall(function()
                 knifeThrown:FireServer(originCFrame, targetCFrame)
             end)
@@ -757,16 +820,6 @@ return function(Window)
         end
     })
 
-    task.spawn(function()
-        while task.wait(2) do
-            local names = {}
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p ~= LocalPlayer then table.insert(names, p.Name) end
-            end
-            pcall(function() PlayerDropdown:Refresh(names, true) end)
-        end
-    end)
-
     CombatTab:CreateButton({
         Name = "Убить выбранного игрока (Remote Spoof)",
         Callback = function()
@@ -799,6 +852,145 @@ return function(Window)
                 end
             end
             isKillingTarget = false
+        end
+    })
+
+    -- ==========================================
+    -- PROXY KNIFE THROW (БРОСОК ОТ ЛИЦА ИГРОКА)
+    -- ==========================================
+    CombatTab:CreateSection("Proxy Knife Throw (Подстава игрока)")
+
+    local ProxyPlayerDropdown = CombatTab:CreateDropdown({
+        Name = "Выбрать игрока-источника (кто бросает)",
+        Options = {},
+        CurrentOption = {},
+        Flag = "ProxyShooterDropdown",
+        Callback = function(Value)
+            if type(Value) == "table" then Value = Value[1] end
+            ProxyPlayerName = Value or ""
+        end
+    })
+
+    -- Авто-обновление списков игроков в обоих Dropdown
+    task.spawn(function()
+        while task.wait(2) do
+            local names = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer then table.insert(names, p.Name) end
+            end
+            pcall(function() PlayerDropdown:Refresh(names, true) end)
+            pcall(function() ProxyPlayerDropdown:Refresh(names, true) end)
+        end
+    end)
+
+    CombatTab:CreateToggle({
+        Name = "Включить Proxy Knife Aura",
+        CurrentValue = false,
+        Flag = "ProxyAuraToggle",
+        Callback = function(Value)
+            ProxyAuraEnabled = Value
+        end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Радиус Proxy Aura (от игрока, studs)",
+        Range = {10, 200}, Increment = 5, CurrentValue = 60,
+        Flag = "ProxyAuraRangeSlider",
+        Callback = function(Value)
+            ProxyAuraRange = Value
+        end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Кулдаун Proxy Aura (сек)",
+        Range = {0.2, 3}, Increment = 0.1, CurrentValue = 0.8,
+        Flag = "ProxyAuraCooldownSlider",
+        Callback = function(Value)
+            ProxyAuraCooldown = Value
+        end
+    })
+
+    CombatTab:CreateButton({
+        Name = "Запустить веер ножей от игрока во всех",
+        Callback = function()
+            if isProxyBursting then return end
+            if ProxyPlayerName == "" then
+                Notify("Proxy Throw", "Выберите игрока-источника!")
+                return
+            end
+
+            local proxyPlayer = Players:FindFirstChild(ProxyPlayerName)
+            if not proxyPlayer or not proxyPlayer.Character then
+                Notify("Proxy Throw", "Игрок-источник не найден!")
+                return
+            end
+
+            local knife = getEquippedKnife()
+            if not knife then
+                Notify("Proxy Throw", "Вы не Мардер (нет ножа)!")
+                return
+            end
+
+            isProxyBursting = true
+            local thrownCount = 0
+            for _, target in ipairs(Players:GetPlayers()) do
+                if target ~= LocalPlayer and target ~= proxyPlayer and target.Character then
+                    local hum = target.Character:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        task.spawn(function()
+                            task.wait(math.random() * 0.02)
+                            if fireKnifeThrowFromProxy(proxyPlayer.Character, target.Character) then
+                                thrownCount = thrownCount + 1
+                            end
+                        end)
+                    end
+                end
+            end
+
+            task.delay(0.2, function()
+                isProxyBursting = false
+                if SilentKillEnabled then unequipKnife() end
+                Notify("Proxy Throw", "Запущен веер ножей от: " .. ProxyPlayerName)
+            end)
+        end
+    })
+
+    CombatTab:CreateButton({
+        Name = "Бросить нож от игрока в выбранную цель",
+        Callback = function()
+            if ProxyPlayerName == "" then
+                Notify("Proxy Throw", "Выберите игрока-источника!")
+                return
+            end
+            if SelectedPlayerName == "" then
+                Notify("Proxy Throw", "Выберите цель в списке выше!")
+                return
+            end
+
+            local proxyPlayer = Players:FindFirstChild(ProxyPlayerName)
+            local targetPlayer = Players:FindFirstChild(SelectedPlayerName)
+            if not proxyPlayer or not proxyPlayer.Character then
+                Notify("Proxy Throw", "Игрок-источник не найден!")
+                return
+            end
+            if not targetPlayer or not targetPlayer.Character then
+                Notify("Proxy Throw", "Цель не найдена!")
+                return
+            end
+
+            local knife = getEquippedKnife()
+            if not knife then
+                Notify("Proxy Throw", "Вы не Мардер (нет ножа)!")
+                return
+            end
+
+            local success = fireKnifeThrowFromProxy(proxyPlayer.Character, targetPlayer.Character)
+            if success then
+                Notify("Proxy Throw", "Нож брошен от " .. ProxyPlayerName .. " в " .. SelectedPlayerName)
+                if SilentKillEnabled then
+                    task.delay(SilentKillDelay, function() unequipKnife() end)
+                end
+            end
         end
     })
 
@@ -859,7 +1051,45 @@ return function(Window)
     -- ЕДИНЫЙ ЦИКЛ
     -- ==========================================
     RunService.Heartbeat:Connect(function()
-        -- Knife Aura
+        -- Proxy Knife Aura (Бросок от выбранного игрока по ближайшим к нему)
+        if ProxyAuraEnabled and os.clock() >= ProxyAuraNextUse and ProxyPlayerName ~= "" then
+            local proxyPlayer = Players:FindFirstChild(ProxyPlayerName)
+            if proxyPlayer and proxyPlayer.Character then
+                local pChar = proxyPlayer.Character
+                local pHum = pChar:FindFirstChildOfClass("Humanoid")
+                local pRoot = pChar:FindFirstChild("HumanoidRootPart")
+                if pHum and pHum.Health > 0 and pRoot then
+                    local knife = getEquippedKnife()
+                    if knife then
+                        local nearestTarget, nearestDist = nil, ProxyAuraRange
+                        for _, player in ipairs(Players:GetPlayers()) do
+                            if player ~= LocalPlayer and player ~= proxyPlayer and player.Character then
+                                local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                                local root = player.Character:FindFirstChild("HumanoidRootPart")
+                                if hum and hum.Health > 0 and root then
+                                    local dist = (root.Position - pRoot.Position).Magnitude
+                                    if dist < nearestDist then
+                                        nearestTarget = player
+                                        nearestDist = dist
+                                    end
+                                end
+                            end
+                        end
+
+                        if nearestTarget and nearestTarget.Character then
+                            if fireKnifeThrowFromProxy(pChar, nearestTarget.Character) then
+                                ProxyAuraNextUse = os.clock() + ProxyAuraCooldown
+                                if SilentKillEnabled then
+                                    task.delay(SilentKillDelay, function() unequipKnife() end)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Обычная Knife Aura (от самого себя)
         if KnifeAuraEnabled and os.clock() >= KnifeAuraNextUse then
             local char = LocalPlayer.Character
             local knife = char and char:FindFirstChild("Knife")
@@ -904,7 +1134,7 @@ return function(Window)
         local murderer = findMurderer()
         if not murderer or not murderer.Character then return end
 
-        -- HvH MODE: сначала проверяем дистанцию и видимость, затем спавним пулю в спине/хитбоксе
+        -- HvH MODE: проверка дистанции и видимости -> мгновенный спавн пули в спине
         if HvHMode then
             if not canHvHTarget(murderer.Character) then return end
 
@@ -934,7 +1164,7 @@ return function(Window)
 
                 if activeGun:FindFirstChild("Shoot") then
                     activeGun.Shoot:FireServer(unpack(args))
-                elseif activeGun:FindFirstChild("KnifeLocal") and activeGun:FindFirstChild("CreateBeam") then
+                elseif activeGun:FindFirstChild("KnifeLocal") and activeGun.KnifeLocal:FindFirstChild("CreateBeam") then
                     activeGun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, predictedPosition, "AH2")
                 end
             end
