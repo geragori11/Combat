@@ -1,6 +1,6 @@
 -- =========================================================================
 -- Murder Mystery 2: Auto-Shoot + Manual Shoot (R) + HvH Mode
--- + Murderer/Sheriff Exploits + Remote Kill Spoof + Kill All Except Sheriff + Knife Aura
+-- + Murderer/Sheriff Exploits + Remote Kill Spoof + Silent Kill + Knife Aura
 -- =========================================================================
 
 return function(Window)
@@ -23,9 +23,9 @@ return function(Window)
 
     -- --- НАСТРОЙКИ HvH РЕЖИМА ---
     local HvHMode = false
-    local HvHMaxDistance = 50
+    local HvHMaxDistance = 150
     local HvHRequireVisible = true
-    local HvHShootCooldown = 0.25        -- ОТДЕЛЬНЫЙ кулдаун для HvH (быстрый!)
+    local HvHShootCooldown = 0.25         -- ОТДЕЛЬНЫЙ кулдаун для HvH (быстрый!)
 
     -- --- НАСТРОЙКИ KNIFE AURA ---
     local KnifeAuraEnabled = false
@@ -33,7 +33,9 @@ return function(Window)
     local KnifeAuraCooldown = 1.2
     local KnifeAuraNextUse = 0
 
-    -- --- СОСТОЯНИЕ EXPLOITS ---
+    -- --- НАСТРОЙКИ И СОСТОЯНИЕ EXPLOITS (МАРДЕР) ---
+    local SilentKillEnabled = true
+    local SilentKillDelay = 0.02
     local isKillingAll = false
     local isKillingSheriff = false
     local isKillingTarget = false
@@ -81,7 +83,7 @@ return function(Window)
     -- ==========================================
     local function getPredictedPosition(targetPart, myChar, baseOffset)
         if not targetPart or not myChar then return Vector3.new(0, 0, 0) end
-        local originPart = myChar:FindFirstChild("RightHand")
+        local originPart = myChar:FindFirstChild("RightHand") or myChar:FindFirstChild("Head") or myChar:FindFirstChild("HumanoidRootPart")
         if not originPart then return targetPart.Position end
 
         local targetHRP = targetPart.Parent and targetPart.Parent:FindFirstChild("HumanoidRootPart")
@@ -109,13 +111,40 @@ return function(Window)
     -- ==========================================
     local function getVisiblePart(targetCharacter)
         local myChar = LocalPlayer.Character
-        if not myChar or not myChar:FindFirstChild("RightHand") then return nil end
+        if not myChar then return nil end
 
-        local origin = myChar.RightHand.Position
+        local originPart = myChar:FindFirstChild("Head")
+            or myChar:FindFirstChild("RightHand")
+            or myChar:FindFirstChild("HumanoidRootPart")
+        if not originPart then return nil end
+
+        local origin = originPart.Position
         local raycastParams = RaycastParams.new()
         raycastParams.FilterDescendantsInstances = { myChar }
         raycastParams.FilterType = Enum.RaycastFilterType.Exclude
         raycastParams.IgnoreWater = true
+
+        local priorityNames = {
+            "Head", "UpperTorso", "Torso", "LowerTorso",
+            "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
+            "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg"
+        }
+
+        for _, name in ipairs(priorityNames) do
+            local part = targetCharacter:FindFirstChild(name)
+            if part and part:IsA("BasePart") and part.Transparency < 1 then
+                local targetPos = part.Position
+                local vec = targetPos - origin
+                local dist = vec.Magnitude
+                if dist > 0.1 then
+                    local direction = vec.Unit * (dist + 2)
+                    local result = workspace:Raycast(origin, direction, raycastParams)
+                    if result and result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
+                        return part
+                    end
+                end
+            end
+        end
 
         for _, part in ipairs(targetCharacter:GetDescendants()) do
             if part:IsA("BasePart")
@@ -123,10 +152,14 @@ return function(Window)
                 and part.Transparency < 1
             then
                 local targetPos = part.Position
-                local direction = (targetPos - origin).Unit * ((targetPos - origin).Magnitude + 2)
-                local result = workspace:Raycast(origin, direction, raycastParams)
-                if result and result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
-                    return part
+                local vec = targetPos - origin
+                local dist = vec.Magnitude
+                if dist > 0.1 then
+                    local direction = vec.Unit * (dist + 2)
+                    local result = workspace:Raycast(origin, direction, raycastParams)
+                    if result and result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
+                        return part
+                    end
                 end
             end
         end
@@ -134,22 +167,41 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 4. ХЕЛПЕРЫ ЭКИПИРОВКИ
+    -- 4. ХЕЛПЕРЫ ЭКИПИРОВКИ (ПИСТОЛЕТ И НОЖ)
     -- ==========================================
-    local function getEquippedGun()
+    local function findPlayerGun()
+        local char = LocalPlayer.Character
+        if not char then return nil, false end
+        local gunInChar = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver")
+        if gunInChar then return gunInChar, true end
+
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+        local gunInBag = backpack and (backpack:FindFirstChild("Gun") or backpack:FindFirstChild("Revolver"))
+        if gunInBag then return gunInBag, false end
+
+        return nil, false
+    end
+
+    local function equipAndGetGun(allowAutoEquip)
         local char = LocalPlayer.Character
         if not char then return nil end
-        local backpack = LocalPlayer:FindFirstChild("Backpack")
-        local gun = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver")
-        if gun then return gun end
 
-        local bagGun = backpack and (backpack:FindFirstChild("Gun") or backpack:FindFirstChild("Revolver"))
-        if bagGun and AutoShootEquip then
-            local humanoid = char:FindFirstChildOfClass("Humanoid")
-            if humanoid then
-                humanoid:EquipTool(bagGun)
-                return bagGun
+        local gun, isEquipped = findPlayerGun()
+        if not gun then return nil end
+        if isEquipped then return gun end
+
+        if not allowAutoEquip then return nil end
+
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then
+            hum:EquipTool(gun)
+            local start = os.clock()
+            while gun.Parent ~= char and (os.clock() - start) < 0.2 do
+                task.wait(0.02)
             end
+            gun = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver") or gun
+            task.wait(0.05)
+            return gun
         end
         return nil
     end
@@ -164,34 +216,43 @@ return function(Window)
         local bagKnife = backpack and backpack:FindFirstChild("Knife")
         if bagKnife then
             local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then hum:EquipTool(bagKnife) end
-            return bagKnife
+            if hum then
+                hum:EquipTool(bagKnife)
+                RunService.Heartbeat:Wait()
+            end
+            return char:FindFirstChild("Knife") or bagKnife
         end
         return nil
     end
 
+    local function unequipKnife()
+        local char = LocalPlayer.Character
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            pcall(function() hum:UnequipTools() end)
+        end
+        local knife = char:FindFirstChild("Knife")
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+        if knife and backpack then
+            pcall(function() knife.Parent = backpack end)
+        end
+    end
+
     -- ==========================================
-    -- 5. REMOTE KILL SPOOF
+    -- 5. REMOTE KILL SPOOF + БЕЗЗВУЧНОЕ УБИЙСТВО
     -- ==========================================
-    local function spoofKill(targetPlayer, knife)
+    local function sendKillPacketsToTarget(targetPlayer, knife)
         if not targetPlayer or not targetPlayer.Character then return false end
         local victimChar = targetPlayer.Character
         local victimHum = victimChar:FindFirstChildOfClass("Humanoid")
         if not victimHum or victimHum.Health <= 0 then return false end
 
-        knife = knife or getEquippedKnife()
-        if not knife then return false end
-
         local events = knife:FindFirstChild("Events")
         if not events then return false end
 
-        local knifeStabbed = events:FindFirstChild("KnifeStabbed")
         local handleTouched = events:FindFirstChild("HandleTouched")
         if not handleTouched then return false end
-
-        if knifeStabbed then
-            pcall(function() knifeStabbed:FireServer() end)
-        end
 
         local parts = {}
         for _, name in ipairs({"Head", "UpperTorso", "Torso", "LowerTorso",
@@ -214,30 +275,66 @@ return function(Window)
         return true
     end
 
+    local function spoofKill(targetPlayer, knife, autoUnequipAfter)
+        if not targetPlayer or not targetPlayer.Character then return false end
+        knife = knife or getEquippedKnife()
+        if not knife then return false end
+
+        local events = knife:FindFirstChild("Events")
+        if not events then return false end
+
+        local knifeStabbed = events:FindFirstChild("KnifeStabbed")
+        if knifeStabbed then
+            pcall(function() knifeStabbed:FireServer() end)
+        end
+
+        local ok = sendKillPacketsToTarget(targetPlayer, knife)
+
+        if autoUnequipAfter and SilentKillEnabled then
+            if SilentKillDelay > 0 then
+                task.wait(SilentKillDelay)
+            end
+            unequipKnife()
+        end
+
+        return ok
+    end
+
     local function spoofKillBurst(targetList)
         local knife = getEquippedKnife()
         if not knife then return 0 end
-        for _, player in ipairs(targetList) do
-            task.spawn(function()
-                task.wait(math.random() * 0.01)
-                spoofKill(player, knife)
-            end)
+
+        local events = knife:FindFirstChild("Events")
+        local knifeStabbed = events and events:FindFirstChild("KnifeStabbed")
+        if knifeStabbed then
+            pcall(function() knifeStabbed:FireServer() end)
         end
+
+        for _, player in ipairs(targetList) do
+            sendKillPacketsToTarget(player, knife)
+        end
+
+        if SilentKillEnabled then
+            if SilentKillDelay > 0 then
+                task.wait(SilentKillDelay)
+            end
+            unequipKnife()
+        end
+
         return #targetList
     end
 
     -- ==========================================
-    -- 6. BULLET-AT-HITBOX — БЕЗ ЗАДЕРЖЕК (ОРИГИНАЛ)
-    --    Все выстрелы в одном тике (0 мс).
+    -- 6. BULLET-AT-HITBOX (ПОЯВЛЕНИЕ ПУЛИ В СПИНЕ / ХИТБОКСЕ)
     -- ==========================================
     local function fireBulletAtTarget(targetCharacter, gun)
-        if not targetCharacter or not gun then return end
+        if not targetCharacter or not gun then return false end
 
         local mRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
-        if not mRoot then return end
+        if not mRoot then return false end
 
         local shootRemote = gun:FindFirstChild("Shoot")
-        if not shootRemote then return end
+        if not shootRemote then return false end
 
         local velocity = mRoot.AssemblyLinearVelocity
         local speed = velocity.Magnitude
@@ -246,8 +343,6 @@ return function(Window)
         pcall(function() ping = LocalPlayer:GetNetworkPing() end)
         ping = math.clamp(ping, 0, 0.5)
 
-        -- Порядок важен: Head первым — если первая пуля убьёт, остальные уже не нужны,
-        -- но они всё равно уйдут в одном тике, поэтому ждать нечего.
         local bodyParts = {}
         for _, name in ipairs({
             "Head", "UpperTorso", "Torso", "LowerTorso",
@@ -266,21 +361,49 @@ return function(Window)
                 end
             end
         end
-        if #bodyParts == 0 then return end
+        if #bodyParts == 0 then return false end
 
-        local spawnDir = (speed > 3) and -velocity.Unit or mRoot.CFrame.LookVector
-        local spawnDist = math.clamp(2 - speed * 0.02, 0.4, 2)
+        -- Строго за спиной мардера с направлением в хитбокс
+        local backDir = -mRoot.CFrame.LookVector
+        local spawnDist = math.clamp(1.6 - speed * 0.015, 0.5, 1.6)
 
-        -- БЕЗ task.wait — все выстрелы одним пакетом
         for _, part in ipairs(bodyParts) do
             local predictedPos = part.Position + velocity * ping
-            local originCFrame = CFrame.new(predictedPos + spawnDir * spawnDist)
+            local originPos = predictedPos + (backDir * spawnDist)
+            local originCFrame = CFrame.new(originPos, predictedPos)
             local targetCFrame = CFrame.new(predictedPos)
 
             pcall(function()
                 shootRemote:FireServer(originCFrame, targetCFrame)
             end)
         end
+
+        return true
+    end
+
+    -- Выстрел пулей в спину/хитбокс с авто-экипировкой и двойным залпом (как в "Убить Мардера")
+    local function executeHitboxKill(targetCharacter, allowAutoEquip)
+        local char = LocalPlayer.Character
+        if not char or not targetCharacter then return false end
+
+        local gun = equipAndGetGun(allowAutoEquip)
+        if not gun or gun.Parent ~= char then return false end
+
+        local fired = fireBulletAtTarget(targetCharacter, gun)
+        if fired then
+            task.delay(0.1, function()
+                if targetCharacter and targetCharacter.Parent then
+                    local hum = targetCharacter:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        local g2 = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver") or gun
+                        if g2 and g2.Parent == char then
+                            fireBulletAtTarget(targetCharacter, g2)
+                        end
+                    end
+                end
+            end)
+        end
+        return fired
     end
 
     -- ==========================================
@@ -328,7 +451,7 @@ return function(Window)
         for _, part in ipairs(parts) do
             local predictedPos = part.Position + velocity * ping
             local originPos = predictedPos + dir * spawnDist
-            local originCFrame = CFrame.new(originPos)
+            local originCFrame = CFrame.new(originPos, predictedPos)
             local targetCFrame = CFrame.new(predictedPos)
             pcall(function()
                 knifeThrown:FireServer(originCFrame, targetCFrame)
@@ -341,23 +464,23 @@ return function(Window)
     -- ==========================================
     -- 8. HvH AUTO-AIM & РУЧНОЙ ВЫСТРЕЛ НА R
     -- ==========================================
-    local function tryHvHShot(targetChar, gun)
-        if not HvHMode or not targetChar or not gun then return false end
+    local function canHvHTarget(targetChar)
+        if not targetChar then return false end
 
         local myChar = LocalPlayer.Character
-        if not myChar or not myChar:FindFirstChild("RightHand") then return false end
+        if not myChar then return false end
 
+        local myRoot = myChar:FindFirstChild("HumanoidRootPart") or myChar:FindFirstChild("Head")
         local mRoot = targetChar:FindFirstChild("HumanoidRootPart")
-        if not mRoot then return false end
+        if not myRoot or not mRoot then return false end
 
-        local dist = (mRoot.Position - myChar.RightHand.Position).Magnitude
+        local dist = (mRoot.Position - myRoot.Position).Magnitude
         if dist > HvHMaxDistance then return false end
 
         if HvHRequireVisible then
             if not getVisiblePart(targetChar) then return false end
         end
 
-        fireBulletAtTarget(targetChar, gun)
         return true
     end
 
@@ -372,27 +495,24 @@ return function(Window)
         end
 
         local char = LocalPlayer.Character
-        if not char or not char:FindFirstChild("RightHand") then return end
+        if not char then return end
 
         local humanoid = char:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then return end
 
-        local gun = getEquippedGun()
-        if not gun then
+        local hasGun = findPlayerGun()
+        if not hasGun then
             Notify("Выстрел (R)", "Нет пистолета!")
             return
         end
 
-        if gun.Parent ~= char then
-            task.wait(0.08)
-            gun = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver") or gun
-        end
-
+        -- HvH MODE: проверка видимости -> спавн пули в спине/хитбоксе как в "Убить Мардера"
         if HvHMode then
-            if HvHRequireVisible and not getVisiblePart(murderer.Character) then return end
+            if not canHvHTarget(murderer.Character) then return end
             IsManualShooting = true
-            fireBulletAtTarget(murderer.Character, gun)
-            task.delay(HvHShootCooldown, function()
+            task.spawn(function()
+                executeHitboxKill(murderer.Character, AutoShootEquip)
+                task.wait(HvHShootCooldown)
                 IsManualShooting = false
             end)
             return
@@ -403,20 +523,23 @@ return function(Window)
         if not visiblePart then return end
 
         IsManualShooting = true
+        task.spawn(function()
+            local gun = equipAndGetGun(AutoShootEquip)
+            local rightHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Head")
+            if gun and gun.Parent == char and rightHand then
+                local predictedPosition = getPredictedPosition(visiblePart, char, shootOffset)
+                local args = {
+                    CFrame.new(rightHand.Position),
+                    CFrame.new(predictedPosition)
+                }
 
-        local predictedPosition = getPredictedPosition(visiblePart, char, shootOffset)
-        local args = {
-            CFrame.new(char.RightHand.Position),
-            CFrame.new(predictedPosition)
-        }
-
-        if gun:FindFirstChild("Shoot") then
-            gun.Shoot:FireServer(unpack(args))
-        elseif gun:FindFirstChild("KnifeLocal") and gun.KnifeLocal:FindFirstChild("CreateBeam") then
-            gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, predictedPosition, "AH2")
-        end
-
-        task.delay(shootCooldown, function()
+                if gun:FindFirstChild("Shoot") then
+                    gun.Shoot:FireServer(unpack(args))
+                elseif gun:FindFirstChild("KnifeLocal") and gun.KnifeLocal:FindFirstChild("CreateBeam") then
+                    gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, predictedPosition, "AH2")
+                end
+            end
+            task.wait(shootCooldown)
             IsManualShooting = false
         end)
     end
@@ -469,7 +592,7 @@ return function(Window)
 
     CombatTab:CreateSlider({
         Name = "HvH макс. дистанция (studs)",
-        Range = {10, 200}, Increment = 1, CurrentValue = 50,
+        Range = {10, 500}, Increment = 5, CurrentValue = 150,
         Flag = "HvHMaxDistance",
         Callback = function(Value) HvHMaxDistance = Value end
     })
@@ -530,6 +653,24 @@ return function(Window)
     -- ==========================================
     CombatTab:CreateSection("Murderer Exploits (Remote Spoof)")
 
+    CombatTab:CreateToggle({
+        Name = "Беззвучное убийство (сразу убирать нож)",
+        CurrentValue = true,
+        Flag = "SilentKillToggle",
+        Callback = function(Value)
+            SilentKillEnabled = Value
+        end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Задержка перед убиранием ножа (сек)",
+        Range = {0, 0.25}, Increment = 0.01, CurrentValue = 0.02,
+        Flag = "SilentKillDelaySlider",
+        Callback = function(Value)
+            SilentKillDelay = Value
+        end
+    })
+
     CombatTab:CreateButton({
         Name = "Убить всех (Remote Spoof)",
         Callback = function()
@@ -584,14 +725,22 @@ return function(Window)
                 end
             end
 
-            if not targetSheriff then Notify("MM2 Exploit", "Шериф не найден или мертв!") return end
+            if not targetSheriff then
+                if SilentKillEnabled then unequipKnife() end
+                Notify("MM2 Exploit", "Шериф не найден или мертв!")
+                return
+            end
 
             isKillingSheriff = true
-            for round = 1, 5 do
-                task.spawn(function() spoofKill(targetSheriff, knife) end)
-                task.wait(0.04)
-                local hum = targetSheriff.Character and targetSheriff.Character:FindFirstChildOfClass("Humanoid")
-                if not hum or hum.Health <= 0 then break end
+            if SilentKillEnabled then
+                spoofKill(targetSheriff, knife, true)
+            else
+                for round = 1, 5 do
+                    task.spawn(function() spoofKill(targetSheriff, knife, false) end)
+                    task.wait(0.04)
+                    local hum = targetSheriff.Character and targetSheriff.Character:FindFirstChildOfClass("Humanoid")
+                    if not hum or hum.Health <= 0 then break end
+                end
             end
             isKillingSheriff = false
         end
@@ -627,19 +776,27 @@ return function(Window)
 
             local targetPlayer = Players:FindFirstChild(SelectedPlayerName)
             if not targetPlayer or not targetPlayer.Character then
+                if SilentKillEnabled then unequipKnife() end
                 Notify("MM2 Exploit", "Цель покинула сервер или не найдена!")
                 return
             end
 
             local hum = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
-            if not hum or hum.Health <= 0 then return end
+            if not hum or hum.Health <= 0 then
+                if SilentKillEnabled then unequipKnife() end
+                return
+            end
 
             isKillingTarget = true
-            for round = 1, 5 do
-                task.spawn(function() spoofKill(targetPlayer, knife) end)
-                task.wait(0.04)
-                local h = targetPlayer.Character and targetPlayer.Character:FindFirstChildOfClass("Humanoid")
-                if not h or h.Health <= 0 then break end
+            if SilentKillEnabled then
+                spoofKill(targetPlayer, knife, true)
+            else
+                for round = 1, 5 do
+                    task.spawn(function() spoofKill(targetPlayer, knife, false) end)
+                    task.wait(0.04)
+                    local h = targetPlayer.Character and targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+                    if not h or h.Health <= 0 then break end
+                end
             end
             isKillingTarget = false
         end
@@ -682,17 +839,10 @@ return function(Window)
             local char = LocalPlayer.Character
             if not char then return end
 
-            local backpack = LocalPlayer:FindFirstChild("Backpack")
-            local gun = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver")
-                or (backpack and (backpack:FindFirstChild("Gun") or backpack:FindFirstChild("Revolver")))
-
-            if not gun then Notify("MM2 Exploit", "Вы не Шериф (нет пистолета)!") return end
-
-            if gun.Parent == backpack then
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                if hum then hum:EquipTool(gun) end
-                task.wait(0.15)
-                gun = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver") or gun
+            local hasGun = findPlayerGun()
+            if not hasGun then
+                Notify("MM2 Exploit", "Вы не Шериф (нет пистолета)!")
+                return
             end
 
             local murderer = findMurderer()
@@ -701,18 +851,7 @@ return function(Window)
                 return
             end
 
-            -- Двойной залп без задержки
-            fireBulletAtTarget(murderer.Character, gun)
-            task.delay(0.1, function()
-                local mChar = murderer.Character
-                if mChar then
-                    local hum = mChar:FindFirstChildOfClass("Humanoid")
-                    if hum and hum.Health > 0 then
-                        local g2 = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver") or gun
-                        fireBulletAtTarget(mChar, g2)
-                    end
-                end
-            end)
+            executeHitboxKill(murderer.Character, true)
         end
     })
 
@@ -753,23 +892,28 @@ return function(Window)
         -- Auto-Shoot
         if not AutoShootEnabled or IsShooting then return end
 
-        local murderer = findMurderer()
-        if not murderer or not murderer.Character then return end
-
         local char = LocalPlayer.Character
-        if not char or not char:FindFirstChild("RightHand") then return end
+        if not char then return end
 
         local humanoid = char:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then return end
 
-        local gun = getEquippedGun()
-        if not gun then return end
+        local gun, isEquipped = findPlayerGun()
+        if not gun or (not isEquipped and not AutoShootEquip) then return end
 
-        -- HvH MODE
+        local murderer = findMurderer()
+        if not murderer or not murderer.Character then return end
+
+        -- HvH MODE: сначала проверяем дистанцию и видимость, затем спавним пулю в спине/хитбоксе
         if HvHMode then
+            if not canHvHTarget(murderer.Character) then return end
+
             IsShooting = true
-            tryHvHShot(murderer.Character, gun)
-            task.delay(HvHShootCooldown, function() IsShooting = false end)
+            task.spawn(function()
+                executeHitboxKill(murderer.Character, AutoShootEquip)
+                task.wait(HvHShootCooldown)
+                IsShooting = false
+            end)
             return
         end
 
@@ -778,20 +922,23 @@ return function(Window)
         if not visiblePart then return end
 
         IsShooting = true
+        task.spawn(function()
+            local activeGun = equipAndGetGun(AutoShootEquip)
+            local rightHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Head")
+            if activeGun and activeGun.Parent == char and rightHand then
+                local predictedPosition = getPredictedPosition(visiblePart, char, shootOffset)
+                local args = {
+                    CFrame.new(rightHand.Position),
+                    CFrame.new(predictedPosition)
+                }
 
-        local predictedPosition = getPredictedPosition(visiblePart, char, shootOffset)
-        local args = {
-            CFrame.new(char.RightHand.Position),
-            CFrame.new(predictedPosition)
-        }
-
-        if gun:FindFirstChild("Shoot") then
-            gun.Shoot:FireServer(unpack(args))
-        elseif gun:FindFirstChild("KnifeLocal") and gun.KnifeLocal:FindFirstChild("CreateBeam") then
-            gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, predictedPosition, "AH2")
-        end
-
-        task.delay(shootCooldown, function()
+                if activeGun:FindFirstChild("Shoot") then
+                    activeGun.Shoot:FireServer(unpack(args))
+                elseif activeGun:FindFirstChild("KnifeLocal") and activeGun:FindFirstChild("CreateBeam") then
+                    activeGun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, predictedPosition, "AH2")
+                end
+            end
+            task.wait(shootCooldown)
             IsShooting = false
         end)
     end)
