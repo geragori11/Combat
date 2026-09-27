@@ -1,5 +1,5 @@
 -- =========================================================================
--- Murder Mystery 2: Aimbot + Auto-Shoot + HvH + Murderer/Sheriff Exploits
+-- Murder Mystery 2: Auto-Shoot + HvH Mode + Murderer/Sheriff Exploits
 -- + Remote Kill Spoof + Kill All Except Sheriff + Knife Aura
 -- =========================================================================
 
@@ -10,9 +10,6 @@ return function(Window)
     local LocalPlayer = Players.LocalPlayer
 
     local CombatTab = Window:CreateTab("COMBAT", 4483362458)
-
-    -- --- МАСТЕР-НАСТРОЙКА АИМА ---
-    local AimbotEnabled = false            -- главный тумблер: если выкл — никакие выстрелы не работают
 
     -- --- НАСТРОЙКИ АВТОВЫСТРЕЛА ---
     local AutoShootEnabled = false
@@ -27,7 +24,7 @@ return function(Window)
     local HvHMode = false
     local HvHMaxDistance = 50
     local HvHRequireVisible = true
-    local HvHShootCooldown = 0.25
+    local HvHShootCooldown = 0.25       -- ОТДЕЛЬНЫЙ кулдаун для HvH (быстрый!)
 
     -- --- НАСТРОЙКИ KNIFE AURA ---
     local KnifeAuraEnabled = false
@@ -44,7 +41,7 @@ return function(Window)
     local function Notify(Title, Text)
         pcall(function()
             StarterGui:SetCore("SendNotification", {
-                Title = Title or "Aimbot",
+                Title = Title or "Auto-Shoot",
                 Text = Text or "",
                 Duration = 2
             })
@@ -79,7 +76,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 2. УПРЕЖДЕНИЕ
+    -- 2. УПРЕЖДЕНИЕ (legit)
     -- ==========================================
     local function getPredictedPosition(targetPart, myChar, baseOffset)
         if not targetPart or not myChar then return Vector3.new(0, 0, 0) end
@@ -229,7 +226,8 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 6. BULLET-AT-HITBOX
+    -- 6. BULLET-AT-HITBOX — БЕЗ ЗАДЕРЖЕК
+    --    Все выстрелы в одном тике (0 мс).
     -- ==========================================
     local function fireBulletAtTarget(targetCharacter, gun)
         if not targetCharacter or not gun then return end
@@ -247,6 +245,8 @@ return function(Window)
         pcall(function() ping = LocalPlayer:GetNetworkPing() end)
         ping = math.clamp(ping, 0, 0.5)
 
+        -- Порядок важен: Head первым — если первая пуля убьёт, остальные уже не нужны,
+        -- но они всё равно уйдут в одном тике, поэтому ждать нечего.
         local bodyParts = {}
         for _, name in ipairs({
             "Head", "UpperTorso", "Torso", "LowerTorso",
@@ -270,10 +270,12 @@ return function(Window)
         local spawnDir = (speed > 3) and -velocity.Unit or mRoot.CFrame.LookVector
         local spawnDist = math.clamp(2 - speed * 0.02, 0.4, 2)
 
+        -- БЕЗ task.wait — все выстрелы одним пакетом
         for _, part in ipairs(bodyParts) do
             local predictedPos = part.Position + velocity * ping
             local originCFrame = CFrame.new(predictedPos + spawnDir * spawnDist)
             local targetCFrame = CFrame.new(predictedPos)
+
             pcall(function()
                 shootRemote:FireServer(originCFrame, targetCFrame)
             end)
@@ -281,7 +283,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 7. KNIFE THROW
+    -- 7. KNIFE THROW HvH (тоже без задержек)
     -- ==========================================
     local function fireKnifeThrowAt(targetCharacter, spawnDist)
         if not targetCharacter then return false end
@@ -359,151 +361,31 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 9. ОДИНОЧНЫЙ ВЫСТРЕЛ ПО МАРДЕРУ (для R)
-    -- ==========================================
-    local function ShootAtMurdererOnce()
-        if not AimbotEnabled then
-            Notify("Aimbot", "Aimbot выключен")
-            return false
-        end
-
-        local murderer = findMurderer()
-        if not murderer or not murderer.Character then
-            Notify("Выстрел", "Мардер не найден")
-            return false
-        end
-
-        local char = LocalPlayer.Character
-        if not char or not char:FindFirstChild("RightHand") then
-            Notify("Выстрел", "Нет персонажа")
-            return false
-        end
-
-        local humanoid = char:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then return false end
-
-        local gun = getEquippedGun()
-        if not gun then
-            Notify("Выстрел", "Нет пистолета (вы не Шериф)")
-            return false
-        end
-
-        -- HvH ветка
-        if HvHMode then
-            if tryHvHShot(murderer.Character, gun) then
-                Notify("Выстрел (HvH)", "Попадание по " .. murderer.Name)
-                return true
-            end
-        end
-
-        -- Legit ветка
-        local visiblePart = getVisiblePart(murderer.Character)
-        if not visiblePart then
-            Notify("Выстрел", "Мардер не в зоне видимости")
-            return false
-        end
-
-        local predictedPosition = getPredictedPosition(visiblePart, char, shootOffset)
-        local args = {
-            CFrame.new(char.RightHand.Position),
-            CFrame.new(predictedPosition)
-        }
-
-        if gun:FindFirstChild("Shoot") then
-            gun.Shoot:FireServer(unpack(args))
-            Notify("Выстрел", "По " .. murderer.Name)
-            return true
-        elseif gun:FindFirstChild("KnifeLocal") and gun.KnifeLocal:FindFirstChild("CreateBeam") then
-            gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, predictedPosition, "AH2")
-            Notify("Выстрел", "По " .. murderer.Name)
-            return true
-        end
-
-        return false
-    end
-
-    -- ==========================================
     -- СОЗДАНИЕ UI
     -- ==========================================
-
-    -- ---------- AIMBOT (мастер) ----------
-    CombatTab:CreateSection("Aimbot")
-
-    CombatTab:CreateToggle({
-        Name = "Включить Aimbot",
-        CurrentValue = false,
-        Flag = "AimbotMasterToggle",
-        Callback = function(Value)
-            AimbotEnabled = Value
-            if not Value then IsShooting = false end
-            Notify("Aimbot", Value and "ВКЛЮЧЕН" or "ВЫКЛЮЧЕН")
-        end
-    })
-
-    CombatTab:CreateSlider({
-        Name = "Упреждение (Shoot Offset)",
-        Range = {0, 10}, Increment = 0.1, CurrentValue = 2.1,
-        Flag = "AutoShootOffset",
-        Callback = function(Value) shootOffset = Value end
-    })
-
-    CombatTab:CreateSlider({
-        Name = "Множитель пинга",
-        Range = {0, 5}, Increment = 0.1, CurrentValue = 1,
-        Flag = "AutoShootPingMult",
-        Callback = function(Value) offsetToPingMult = Value end
-    })
-
-    CombatTab:CreateSlider({
-        Name = "Эталонная дистанция (studs)",
-        Range = {5, 100}, Increment = 1, CurrentValue = 30,
-        Flag = "AutoShootRefDistance",
-        Callback = function(Value) referenceDistance = Value end
-    })
-
-    CombatTab:CreateToggle({
-        Name = "Авто-экипировка пистолета",
-        CurrentValue = true,
-        Flag = "AutoShootEquipToggle",
-        Callback = function(Value) AutoShootEquip = Value end
-    })
-
-    -- ---------- AUTO-SHOOT ----------
-    CombatTab:CreateSection("Auto-Shoot (по Мардеру)")
+    CombatTab:CreateSection("Auto-Shoot (Автовыстрел по Мардеру)")
 
     CombatTab:CreateToggle({
         Name = "Включить Автовыстрел",
         CurrentValue = false,
         Flag = "AutoShootMasterToggle",
         Callback = function(Value)
-            if Value and not AimbotEnabled then
-                Notify("Автовыстрел", "Сначала включите Aimbot!")
-                AutoShootEnabled = false
-                return
-            end
             AutoShootEnabled = Value
             if not Value then IsShooting = false end
         end
     })
 
-    CombatTab:CreateSlider({
-        Name = "Задержка между выстрелами (сек)",
-        Range = {0.1, 5}, Increment = 0.1, CurrentValue = 1.5,
-        Flag = "AutoShootCooldown",
-        Callback = function(Value) shootCooldown = Value end
-    })
-
     CombatTab:CreateKeybind({
-        Name = "Одиночный выстрел по Мардеру (по умолчанию R)",
+        Name = "Клавиша вкл/выкл (по умолчанию R)",
         CurrentKeybind = "R",
         HoldToInteract = false,
-        Flag = "ManualShootKeybind",
+        Flag = "AutoShootKeybind",
         Callback = function()
-            ShootAtMurdererOnce()
+            AutoShootEnabled = not AutoShootEnabled
+            Notify("Автовыстрел (R)", AutoShootEnabled and "ВКЛЮЧЕН" or "ВЫКЛЮЧЕН")
         end
     })
 
-    -- ---------- HvH ----------
     CombatTab:CreateSection("HvH Mode (Instant Hit)")
 
     CombatTab:CreateToggle({
@@ -534,7 +416,46 @@ return function(Window)
         Callback = function(Value) HvHShootCooldown = Value end
     })
 
-    -- ---------- MURDERER EXPLOITS ----------
+    CombatTab:CreateSection("Auto-Shoot (Fine-Tune)")
+
+    CombatTab:CreateSlider({
+        Name = "Упреждение (Shoot Offset)",
+        Range = {0, 10}, Increment = 0.1, CurrentValue = 2.1,
+        Flag = "AutoShootOffset",
+        Callback = function(Value) shootOffset = Value end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Множитель пинга",
+        Range = {0, 5}, Increment = 0.1, CurrentValue = 1,
+        Flag = "AutoShootPingMult",
+        Callback = function(Value) offsetToPingMult = Value end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Эталонная дистанция (studs)",
+        Range = {5, 100}, Increment = 1, CurrentValue = 30,
+        Flag = "AutoShootRefDistance",
+        Callback = function(Value) referenceDistance = Value end
+    })
+
+    CombatTab:CreateSlider({
+        Name = "Задержка между выстрелами (legit, сек)",
+        Range = {0.1, 5}, Increment = 0.1, CurrentValue = 1.5,
+        Flag = "AutoShootCooldown",
+        Callback = function(Value) shootCooldown = Value end
+    })
+
+    CombatTab:CreateToggle({
+        Name = "Авто-экипировка пистолета",
+        CurrentValue = true,
+        Flag = "AutoShootEquipToggle",
+        Callback = function(Value) AutoShootEquip = Value end
+    })
+
+    -- ==========================================
+    -- MURDERER EXPLOITS
+    -- ==========================================
     CombatTab:CreateSection("Murderer Exploits (Remote Spoof)")
 
     CombatTab:CreateButton({
@@ -652,7 +573,9 @@ return function(Window)
         end
     })
 
-    -- ---------- KNIFE AURA ----------
+    -- ==========================================
+    -- KNIFE AURA
+    -- ==========================================
     CombatTab:CreateSection("Knife Aura")
 
     CombatTab:CreateToggle({
@@ -676,7 +599,9 @@ return function(Window)
         Callback = function(Value) KnifeAuraCooldown = Value end
     })
 
-    -- ---------- SHERIFF EXPLOITS ----------
+    -- ==========================================
+    -- SHERIFF EXPLOITS
+    -- ==========================================
     CombatTab:CreateSection("Sheriff Exploits")
 
     CombatTab:CreateButton({
@@ -704,6 +629,7 @@ return function(Window)
                 return
             end
 
+            -- Двойной залп без задержки
             fireBulletAtTarget(murderer.Character, gun)
             task.delay(0.1, function()
                 local mChar = murderer.Character
@@ -722,7 +648,7 @@ return function(Window)
     -- ЕДИНЫЙ ЦИКЛ
     -- ==========================================
     RunService.Heartbeat:Connect(function()
-        -- Knife Aura (независимо от Aimbot)
+        -- Knife Aura
         if KnifeAuraEnabled and os.clock() >= KnifeAuraNextUse then
             local char = LocalPlayer.Character
             local knife = char and char:FindFirstChild("Knife")
@@ -752,8 +678,8 @@ return function(Window)
             end
         end
 
-        -- Auto-Shoot: мастер + автовыстрел должны быть включены
-        if not AimbotEnabled or not AutoShootEnabled or IsShooting then return end
+        -- Auto-Shoot
+        if not AutoShootEnabled or IsShooting then return end
 
         local murderer = findMurderer()
         if not murderer or not murderer.Character then return end
