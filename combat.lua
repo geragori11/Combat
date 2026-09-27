@@ -1,6 +1,6 @@
 -- =========================================================================
--- Murder Mystery 2: Auto-Shoot + HvH Mode + Murderer/Sheriff Exploits
--- + Remote Kill Spoof + Kill All Except Sheriff + Knife Aura
+-- Murder Mystery 2: Auto-Shoot + Manual Shoot (R) + HvH Mode (Torso -> Head)
+-- + Murderer/Sheriff Exploits + Remote Kill Spoof + Knife Aura
 -- =========================================================================
 
 return function(Window)
@@ -11,10 +11,12 @@ return function(Window)
 
     local CombatTab = Window:CreateTab("COMBAT", 4483362458)
 
-    -- --- НАСТРОЙКИ АВТОВЫСТРЕЛА ---
+    -- --- НАСТРОЙКИ АВТОВЫСТРЕЛА И РУЧНОГО ВЫСТРЕЛА ---
     local AutoShootEnabled = false
     local AutoShootEquip = true
-    local IsShooting = false
+    local IsAutoShooting = false
+    local IsManualShooting = false
+    local ManualRequireVisible = false
     local shootOffset = 2.1
     local offsetToPingMult = 1
     local referenceDistance = 30
@@ -24,7 +26,7 @@ return function(Window)
     local HvHMode = false
     local HvHMaxDistance = 50
     local HvHRequireVisible = true
-    local HvHShootCooldown = 0.25       -- ОТДЕЛЬНЫЙ кулдаун для HvH (быстрый!)
+    local HvHShootCooldown = 0.25
 
     -- --- НАСТРОЙКИ KNIFE AURA ---
     local KnifeAuraEnabled = false
@@ -41,7 +43,7 @@ return function(Window)
     local function Notify(Title, Text)
         pcall(function()
             StarterGui:SetCore("SendNotification", {
-                Title = Title or "Auto-Shoot",
+                Title = Title or "MM2 Combat",
                 Text = Text or "",
                 Duration = 2
             })
@@ -76,11 +78,11 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 2. УПРЕЖДЕНИЕ (legit)
+    -- 2. УПРЕЖДЕНИЕ (LEGIT)
     -- ==========================================
     local function getPredictedPosition(targetPart, myChar, baseOffset)
         if not targetPart or not myChar then return Vector3.new(0, 0, 0) end
-        local originPart = myChar:FindFirstChild("RightHand")
+        local originPart = myChar:FindFirstChild("RightHand") or myChar:FindFirstChild("Right Arm") or myChar:FindFirstChild("HumanoidRootPart")
         if not originPart then return targetPart.Position end
 
         local targetHRP = targetPart.Parent and targetPart.Parent:FindFirstChild("HumanoidRootPart")
@@ -106,15 +108,39 @@ return function(Window)
     -- ==========================================
     -- 3. ПРОВЕРКА ВИДИМОСТИ
     -- ==========================================
+    local function getMyOriginPart(myChar)
+        if not myChar then return nil end
+        return myChar:FindFirstChild("RightHand")
+            or myChar:FindFirstChild("Right Arm")
+            or myChar:FindFirstChild("HumanoidRootPart")
+    end
+
     local function getVisiblePart(targetCharacter)
         local myChar = LocalPlayer.Character
-        if not myChar or not myChar:FindFirstChild("RightHand") then return nil end
+        local originPart = getMyOriginPart(myChar)
+        if not originPart then return nil end
 
-        local origin = myChar.RightHand.Position
+        local origin = originPart.Position
         local raycastParams = RaycastParams.new()
         raycastParams.FilterDescendantsInstances = { myChar }
         raycastParams.FilterType = Enum.RaycastFilterType.Exclude
         raycastParams.IgnoreWater = true
+
+        local priorityNames = { "Head", "UpperTorso", "Torso", "LowerTorso" }
+        for _, name in ipairs(priorityNames) do
+            local part = targetCharacter:FindFirstChild(name)
+            if part and part:IsA("BasePart") and part.Transparency < 1 then
+                local targetPos = part.Position
+                local diff = targetPos - origin
+                if diff.Magnitude > 0.01 then
+                    local direction = diff.Unit * (diff.Magnitude + 2)
+                    local result = workspace:Raycast(origin, direction, raycastParams)
+                    if result and result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
+                        return part
+                    end
+                end
+            end
+        end
 
         for _, part in ipairs(targetCharacter:GetDescendants()) do
             if part:IsA("BasePart")
@@ -122,10 +148,13 @@ return function(Window)
                 and part.Transparency < 1
             then
                 local targetPos = part.Position
-                local direction = (targetPos - origin).Unit * ((targetPos - origin).Magnitude + 2)
-                local result = workspace:Raycast(origin, direction, raycastParams)
-                if result and result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
-                    return part
+                local diff = targetPos - origin
+                if diff.Magnitude > 0.01 then
+                    local direction = diff.Unit * (diff.Magnitude + 2)
+                    local result = workspace:Raycast(origin, direction, raycastParams)
+                    if result and result.Instance and result.Instance:IsDescendantOf(targetCharacter) then
+                        return part
+                    end
                 end
             end
         end
@@ -135,7 +164,7 @@ return function(Window)
     -- ==========================================
     -- 4. ХЕЛПЕРЫ ЭКИПИРОВКИ
     -- ==========================================
-    local function getEquippedGun()
+    local function getEquippedGun(forceEquip)
         local char = LocalPlayer.Character
         if not char then return nil end
         local backpack = LocalPlayer:FindFirstChild("Backpack")
@@ -143,7 +172,7 @@ return function(Window)
         if gun then return gun end
 
         local bagGun = backpack and (backpack:FindFirstChild("Gun") or backpack:FindFirstChild("Revolver"))
-        if bagGun and AutoShootEquip then
+        if bagGun and (AutoShootEquip or forceEquip) then
             local humanoid = char:FindFirstChildOfClass("Humanoid")
             if humanoid then
                 humanoid:EquipTool(bagGun)
@@ -226,64 +255,61 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 6. BULLET-AT-HITBOX — БЕЗ ЗАДЕРЖЕК
-    --    Все выстрелы в одном тике (0 мс).
+    -- 6. HvH BULLET: СПАВН В ТОРСЕ -> НАПРАВЛЕНИЕ В ГОЛОВУ
     -- ==========================================
     local function fireBulletAtTarget(targetCharacter, gun)
-        if not targetCharacter or not gun then return end
+        if not targetCharacter or not gun then return false end
 
         local mRoot = targetCharacter:FindFirstChild("HumanoidRootPart")
-        if not mRoot then return end
+        if not mRoot then return false end
 
-        local shootRemote = gun:FindFirstChild("Shoot")
-        if not shootRemote then return end
+        local torso = targetCharacter:FindFirstChild("UpperTorso")
+            or targetCharacter:FindFirstChild("Torso")
+            or targetCharacter:FindFirstChild("LowerTorso")
+            or mRoot
+
+        local head = targetCharacter:FindFirstChild("Head")
+        if not torso then return false end
 
         local velocity = mRoot.AssemblyLinearVelocity
-        local speed = velocity.Magnitude
-
         local ping = 0
         pcall(function() ping = LocalPlayer:GetNetworkPing() end)
         ping = math.clamp(ping, 0, 0.5)
 
-        -- Порядок важен: Head первым — если первая пуля убьёт, остальные уже не нужны,
-        -- но они всё равно уйдут в одном тике, поэтому ждать нечего.
-        local bodyParts = {}
-        for _, name in ipairs({
-            "Head", "UpperTorso", "Torso", "LowerTorso",
-            "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
-            "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg"
-        }) do
-            local part = targetCharacter:FindFirstChild(name)
-            if part and part:IsA("BasePart") then
-                table.insert(bodyParts, part)
-            end
+        local predictionOffset = velocity * ping
+
+        -- Точка спавна пули в момент расчёта строго в торсе
+        local originPos = torso.Position + predictionOffset
+
+        -- Точка назначения строго в голове (если голова отсутствует — чуть выше центра торса)
+        local targetPos = head and (head.Position + predictionOffset) or (originPos + Vector3.new(0, 1.5, 0))
+
+        -- Защита от нулевого вектора, если координаты совпали
+        if (targetPos - originPos).Magnitude < 0.001 then
+            targetPos = originPos + Vector3.new(0, 1, 0)
         end
-        if #bodyParts == 0 then
-            for _, d in ipairs(targetCharacter:GetDescendants()) do
-                if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
-                    table.insert(bodyParts, d)
-                end
-            end
-        end
-        if #bodyParts == 0 then return end
 
-        local spawnDir = (speed > 3) and -velocity.Unit or mRoot.CFrame.LookVector
-        local spawnDist = math.clamp(2 - speed * 0.02, 0.4, 2)
+        local originCFrame = CFrame.lookAt(originPos, targetPos)
+        local targetCFrame = CFrame.new(targetPos)
 
-        -- БЕЗ task.wait — все выстрелы одним пакетом
-        for _, part in ipairs(bodyParts) do
-            local predictedPos = part.Position + velocity * ping
-            local originCFrame = CFrame.new(predictedPos + spawnDir * spawnDist)
-            local targetCFrame = CFrame.new(predictedPos)
-
+        local shootRemote = gun:FindFirstChild("Shoot")
+        if shootRemote then
             pcall(function()
                 shootRemote:FireServer(originCFrame, targetCFrame)
             end)
+            return true
+        elseif gun:FindFirstChild("KnifeLocal") and gun.KnifeLocal:FindFirstChild("CreateBeam") then
+            pcall(function()
+                gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, targetPos, "AH2")
+            end)
+            return true
         end
+
+        return false
     end
 
     -- ==========================================
-    -- 7. KNIFE THROW HvH (тоже без задержек)
+    -- 7. KNIFE THROW HvH
     -- ==========================================
     local function fireKnifeThrowAt(targetCharacter, spawnDist)
         if not targetCharacter then return false end
@@ -301,69 +327,168 @@ return function(Window)
         if not mRoot then return false end
 
         local velocity = mRoot.AssemblyLinearVelocity
-        local speed = velocity.Magnitude
-
         local ping = 0
         pcall(function() ping = LocalPlayer:GetNetworkPing() end)
         ping = math.clamp(ping, 0, 0.4)
 
-        local dir = (speed > 3) and velocity.Unit or mRoot.CFrame.LookVector
+        local torso = targetCharacter:FindFirstChild("UpperTorso")
+            or targetCharacter:FindFirstChild("Torso")
+            or mRoot
+        local head = targetCharacter:FindFirstChild("Head")
 
-        local parts = {}
-        for _, name in ipairs({"Head", "UpperTorso", "Torso", "LowerTorso",
-                               "LeftUpperArm", "RightUpperArm"}) do
-            local p = targetCharacter:FindFirstChild(name)
-            if p and p:IsA("BasePart") then table.insert(parts, p) end
-        end
-        if #parts == 0 then
-            for _, d in ipairs(targetCharacter:GetDescendants()) do
-                if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
-                    table.insert(parts, d)
-                end
-            end
-        end
-        if #parts == 0 then return false end
+        local predictionOffset = velocity * ping
+        local originPos = torso.Position + predictionOffset
+        local targetPos = head and (head.Position + predictionOffset) or (originPos + Vector3.new(0, 1.5, 0))
 
-        for _, part in ipairs(parts) do
-            local predictedPos = part.Position + velocity * ping
-            local originPos = predictedPos + dir * spawnDist
-            local originCFrame = CFrame.new(originPos)
-            local targetCFrame = CFrame.new(predictedPos)
-            pcall(function()
-                knifeThrown:FireServer(originCFrame, targetCFrame)
-            end)
+        if (targetPos - originPos).Magnitude < 0.001 then
+            targetPos = originPos + Vector3.new(0, 1, 0)
         end
+
+        local originCFrame = CFrame.lookAt(originPos, targetPos)
+        local targetCFrame = CFrame.new(targetPos)
+
+        pcall(function()
+            knifeThrown:FireServer(originCFrame, targetCFrame)
+        end)
 
         return true
     end
 
     -- ==========================================
-    -- 8. HvH AUTO-AIM
+    -- 8. ФУНКЦИИ ВЫСТРЕЛА (HVH И LEGIT, РУЧНОЙ И АВТО)
     -- ==========================================
-    local function tryHvHShot(targetChar, gun)
-        if not HvHMode or not targetChar or not gun then return false end
+    local function tryHvHShot(targetChar, gun, ignoreChecks)
+        if not targetChar or not gun then return false end
 
         local myChar = LocalPlayer.Character
-        if not myChar or not myChar:FindFirstChild("RightHand") then return false end
+        local originPart = getMyOriginPart(myChar)
+        if not originPart then return false end
 
         local mRoot = targetChar:FindFirstChild("HumanoidRootPart")
         if not mRoot then return false end
 
-        local dist = (mRoot.Position - myChar.RightHand.Position).Magnitude
-        if dist > HvHMaxDistance then return false end
+        if not ignoreChecks then
+            local dist = (mRoot.Position - originPart.Position).Magnitude
+            if dist > HvHMaxDistance then return false end
 
-        if HvHRequireVisible then
-            if not getVisiblePart(targetChar) then return false end
+            if HvHRequireVisible then
+                if not getVisiblePart(targetChar) then return false end
+            end
         end
 
-        fireBulletAtTarget(targetChar, gun)
-        return true
+        return fireBulletAtTarget(targetChar, gun)
+    end
+
+    local function tryLegitShot(targetChar, gun, ignoreVisibility)
+        local myChar = LocalPlayer.Character
+        local originPart = getMyOriginPart(myChar)
+        if not originPart or not targetChar or not gun then return false end
+
+        local targetPart = getVisiblePart(targetChar)
+        if not targetPart then
+            if ignoreVisibility then
+                targetPart = targetChar:FindFirstChild("Head")
+                    or targetChar:FindFirstChild("UpperTorso")
+                    or targetChar:FindFirstChild("Torso")
+                    or targetChar:FindFirstChild("HumanoidRootPart")
+            else
+                return false
+            end
+        end
+        if not targetPart then return false end
+
+        local predictedPosition = getPredictedPosition(targetPart, myChar, shootOffset)
+        local originCFrame = CFrame.lookAt(originPart.Position, predictedPosition)
+        local targetCFrame = CFrame.new(predictedPosition)
+
+        if gun:FindFirstChild("Shoot") then
+            pcall(function()
+                gun.Shoot:FireServer(originCFrame, targetCFrame)
+            end)
+            return true
+        elseif gun:FindFirstChild("KnifeLocal") and gun.KnifeLocal:FindFirstChild("CreateBeam") then
+            pcall(function()
+                gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, predictedPosition, "AH2")
+            end)
+            return true
+        end
+
+        return false
+    end
+
+    -- Одиночный ручной выстрел по клавише R
+    local function executeManualShot()
+        if IsManualShooting then return end
+
+        local char = LocalPlayer.Character
+        if not char then return end
+
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then return end
+
+        local murderer = findMurderer()
+        if not murderer or not murderer.Character then
+            Notify("Выстрел (R)", "Мардер не найден или мертв!")
+            return
+        end
+
+        local gun = getEquippedGun(true)
+        if not gun then
+            Notify("Выстрел (R)", "У вас нет пистолета!")
+            return
+        end
+
+        -- Если пистолет только что достали из инвентаря, даем минимальную задержку на экипировку
+        if gun.Parent ~= char then
+            task.wait(0.08)
+            gun = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver") or gun
+        end
+
+        if ManualRequireVisible and not getVisiblePart(murderer.Character) then
+            Notify("Выстрел (R)", "Мардер за стеной (вне зоны видимости)!")
+            return
+        end
+
+        IsManualShooting = true
+        local activeCooldown = HvHMode and HvHShootCooldown or shootCooldown
+
+        if HvHMode then
+            -- В ручном режиме стреляем Торс -> Голова без ограничения по HvHMaxDistance
+            fireBulletAtTarget(murderer.Character, gun)
+        else
+            tryLegitShot(murderer.Character, gun, not ManualRequireVisible)
+        end
+
+        task.delay(activeCooldown, function()
+            IsManualShooting = false
+        end)
     end
 
     -- ==========================================
     -- СОЗДАНИЕ UI
     -- ==========================================
-    CombatTab:CreateSection("Auto-Shoot (Автовыстрел по Мардеру)")
+    CombatTab:CreateSection("Ручной выстрел по клавише (Manual Shoot)")
+
+    CombatTab:CreateKeybind({
+        Name = "Выстрелить по Мардеру (одиночный выстрел)",
+        CurrentKeybind = "R",
+        HoldToInteract = false,
+        Flag = "ManualShootKeybind",
+        Callback = function()
+            executeManualShot()
+        end
+    })
+
+    CombatTab:CreateToggle({
+        Name = "Ручной выстрел: проверять видимость (стены)",
+        CurrentValue = false,
+        Flag = "ManualRequireVisibleToggle",
+        Callback = function(Value)
+            ManualRequireVisible = Value
+        end
+    })
+
+    CombatTab:CreateSection("Auto-Shoot (Автоматический выстрел)")
 
     CombatTab:CreateToggle({
         Name = "Включить Автовыстрел",
@@ -371,39 +496,47 @@ return function(Window)
         Flag = "AutoShootMasterToggle",
         Callback = function(Value)
             AutoShootEnabled = Value
-            if not Value then IsShooting = false end
+            if not Value then IsAutoShooting = false end
         end
     })
 
     CombatTab:CreateKeybind({
-        Name = "Клавиша вкл/выкл (по умолчанию R)",
-        CurrentKeybind = "R",
+        Name = "Клавиша вкл/выкл Автовыстрела",
+        CurrentKeybind = "T",
         HoldToInteract = false,
-        Flag = "AutoShootKeybind",
+        Flag = "AutoShootToggleKeybind",
         Callback = function()
             AutoShootEnabled = not AutoShootEnabled
-            Notify("Автовыстрел (R)", AutoShootEnabled and "ВКЛЮЧЕН" or "ВЫКЛЮЧЕН")
+            if not AutoShootEnabled then IsAutoShooting = false end
+            Notify("Автовыстрел", AutoShootEnabled and "ВКЛЮЧЕН" or "ВЫКЛЮЧЕН")
         end
     })
 
-    CombatTab:CreateSection("HvH Mode (Instant Hit)")
+    CombatTab:CreateToggle({
+        Name = "Авто-экипировка пистолета",
+        CurrentValue = true,
+        Flag = "AutoShootEquipToggle",
+        Callback = function(Value) AutoShootEquip = Value end
+    })
+
+    CombatTab:CreateSection("HvH Mode (Спавн в Торсе -> Голова)")
 
     CombatTab:CreateToggle({
-        Name = "Включить HvH (пуля в хитбоксе)",
+        Name = "Включить HvH (Торс -> Голова)",
         CurrentValue = false,
         Flag = "HvHModeToggle",
         Callback = function(Value) HvHMode = Value end
     })
 
     CombatTab:CreateSlider({
-        Name = "HvH макс. дистанция (studs)",
+        Name = "HvH макс. дистанция для Автовыстрела (studs)",
         Range = {10, 200}, Increment = 1, CurrentValue = 50,
         Flag = "HvHMaxDistance",
         Callback = function(Value) HvHMaxDistance = Value end
     })
 
     CombatTab:CreateToggle({
-        Name = "HvH: только по видимым частям",
+        Name = "HvH Автовыстрел: только по видимым частям",
         CurrentValue = true,
         Flag = "HvHRequireVisible",
         Callback = function(Value) HvHRequireVisible = Value end
@@ -416,7 +549,7 @@ return function(Window)
         Callback = function(Value) HvHShootCooldown = Value end
     })
 
-    CombatTab:CreateSection("Auto-Shoot (Fine-Tune)")
+    CombatTab:CreateSection("Legit Настройки (Упреждение)")
 
     CombatTab:CreateSlider({
         Name = "Упреждение (Shoot Offset)",
@@ -444,13 +577,6 @@ return function(Window)
         Range = {0.1, 5}, Increment = 0.1, CurrentValue = 1.5,
         Flag = "AutoShootCooldown",
         Callback = function(Value) shootCooldown = Value end
-    })
-
-    CombatTab:CreateToggle({
-        Name = "Авто-экипировка пистолета",
-        CurrentValue = true,
-        Flag = "AutoShootEquipToggle",
-        Callback = function(Value) AutoShootEquip = Value end
     })
 
     -- ==========================================
@@ -605,7 +731,7 @@ return function(Window)
     CombatTab:CreateSection("Sheriff Exploits")
 
     CombatTab:CreateButton({
-        Name = "Убить Мардера (пуля в хитбокс)",
+        Name = "Убить Мардера (Торс -> Голова)",
         Callback = function()
             local char = LocalPlayer.Character
             if not char then return end
@@ -629,7 +755,6 @@ return function(Window)
                 return
             end
 
-            -- Двойной залп без задержки
             fireBulletAtTarget(murderer.Character, gun)
             task.delay(0.1, function()
                 local mChar = murderer.Character
@@ -645,7 +770,7 @@ return function(Window)
     })
 
     -- ==========================================
-    -- ЕДИНЫЙ ЦИКЛ
+    -- ЕДИНЫЙ ЦИКЛ (KNIFE AURA + AUTO-SHOOT)
     -- ==========================================
     RunService.Heartbeat:Connect(function()
         -- Knife Aura
@@ -678,49 +803,38 @@ return function(Window)
             end
         end
 
-        -- Auto-Shoot
-        if not AutoShootEnabled or IsShooting then return end
+        -- Auto-Shoot (работает только когда включен переключатель Автовыстрела)
+        if not AutoShootEnabled or IsAutoShooting then return end
 
         local murderer = findMurderer()
         if not murderer or not murderer.Character then return end
 
         local char = LocalPlayer.Character
-        if not char or not char:FindFirstChild("RightHand") then return end
+        if not getMyOriginPart(char) then return end
 
         local humanoid = char:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then return end
 
-        local gun = getEquippedGun()
+        local gun = getEquippedGun(false)
         if not gun then return end
 
-        -- HvH MODE
+        -- HvH MODE (Спавн в Торсе -> Направление в Голову)
         if HvHMode then
-            IsShooting = true
-            tryHvHShot(murderer.Character, gun)
-            task.delay(HvHShootCooldown, function() IsShooting = false end)
+            if tryHvHShot(murderer.Character, gun, false) then
+                IsAutoShooting = true
+                task.delay(HvHShootCooldown, function()
+                    IsAutoShooting = false
+                end)
+            end
             return
         end
 
         -- LEGIT MODE
-        local visiblePart = getVisiblePart(murderer.Character)
-        if not visiblePart then return end
-
-        IsShooting = true
-
-        local predictedPosition = getPredictedPosition(visiblePart, char, shootOffset)
-        local args = {
-            CFrame.new(char.RightHand.Position),
-            CFrame.new(predictedPosition)
-        }
-
-        if gun:FindFirstChild("Shoot") then
-            gun.Shoot:FireServer(unpack(args))
-        elseif gun:FindFirstChild("KnifeLocal") and gun.KnifeLocal:FindFirstChild("CreateBeam") then
-            gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, predictedPosition, "AH2")
+        if tryLegitShot(murderer.Character, gun, false) then
+            IsAutoShooting = true
+            task.delay(shootCooldown, function()
+                IsAutoShooting = false
+            end)
         end
-
-        task.delay(shootCooldown, function()
-            IsShooting = false
-        end)
     end)
 end
