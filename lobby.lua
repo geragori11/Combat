@@ -1,14 +1,14 @@
-
+-- =========================================================================
+-- XCLIENT MODULE: OPTIMIZED MM2 VOTING TAB (ZERO-LAG + FIXED IMAGES)
+-- Формат внешнего подключаемого модуля (как player.lua / combat.lua)
+-- =========================================================================
 
 return function(Window)
     local Players = game:GetService("Players")
-    local RunService = game:GetService("RunService")
     local StarterGui = game:GetService("StarterGui")
     local CoreGui = game:GetService("CoreGui")
-
     local LocalPlayer = Players.LocalPlayer
 
-    -- Создание отдельной вкладки модуля
     local VotingTab = Window:CreateTab("Голосование", 4483362458)
 
     local function Notify(title, text, duration)
@@ -27,7 +27,6 @@ return function(Window)
     local IsGlitchingVote = false
     local TargetVoteIndex = nil
     local CurrentVoteThread = nil
-    local InjectedVoteImages = {}
 
     -- ==========================================
     -- ПОИСК ОБЪЕКТОВ ЛОББИ MM2
@@ -43,7 +42,6 @@ return function(Window)
         local lobby = getLobby()
         if not lobby then return nil end
 
-        -- 1. Детекторы касания в VotePads (Detector1, Detector2, Detector3)
         local votePads = lobby:FindFirstChild("VotePads")
         if votePads then
             local detector = votePads:FindFirstChild("Detector" .. tostring(index))
@@ -52,7 +50,6 @@ return function(Window)
             end
         end
 
-        -- 2. Детали Pad в VotePadX
         local padModel = lobby:FindFirstChild("VotePad" .. tostring(index))
         if padModel then
             local pad = padModel:FindFirstChild("Pad")
@@ -72,7 +69,6 @@ return function(Window)
         return true
     end
 
-    -- Считывание актуального названия карты, счетчика голосов и картинки
     local function getVoteCardData(index)
         local lobby = getLobby()
         if not lobby then return "Карта " .. index, 0, "", false end
@@ -96,7 +92,6 @@ return function(Window)
                 end
             end
 
-            -- Извлечение превью карты из MapInfoGui
             local mapInfoGui = votePadModel:FindFirstChild("MapInfoGui")
             local mapIcon = mapInfoGui and mapInfoGui:FindFirstChild("MapIcon")
             if mapIcon and mapIcon:IsA("ImageLabel") and isValidVoteImage(mapIcon.Image) then
@@ -104,12 +99,11 @@ return function(Window)
             end
         end
 
-        -- Резервное извлечение картинки из VoteIcons
         if not isValidVoteImage(mapImage) and lobby:FindFirstChild("VoteIcons") then
             local padIcon = lobby.VoteIcons:FindFirstChild("VotePad" .. tostring(index))
             if padIcon and padIcon:FindFirstChild("Surface") and padIcon.Surface:FindFirstChild("Background") then
                 local bg = padIcon.Surface.Background
-                if bg:IsA("ImageLabel") and isValidVoteImage(bg.Image) then
+                if bg and bg:IsA("ImageLabel") and isValidVoteImage(bg.Image) then
                     mapImage = bg.Image
                 end
             end
@@ -139,7 +133,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- УПРАВЛЕНИЕ ГЛИТЧ-ГОЛОСОВАНИЕМ
+    -- УПРАВЛЕНИЕ ГЛИТЧЕМ
     -- ==========================================
     local function stopVoteGlitch(reason)
         if not IsGlitchingVote and not CurrentVoteThread then return end
@@ -161,7 +155,7 @@ return function(Window)
     local function startVoteGlitchLoop(index)
         local mapName, _, mapImage, isVoting = getVoteCardData(index)
         if not isVoting or not isValidVoteImage(mapImage) then
-            Notify("Заблокировано", "Картинка карты отсутствует! Раунд уже начался или идёт.", 3.5)
+            Notify("Заблокировано", "Картинка отсутствует! Раунд уже начался или идёт.", 3.5)
             return
         end
 
@@ -181,7 +175,6 @@ return function(Window)
 
         CurrentVoteThread = task.spawn(function()
             while IsGlitchingVote do
-                -- 1. Проверка перед телепортацией: доступна ли карта
                 local _, _, curImg, curActive = getVoteCardData(index)
                 if not curActive or not isValidVoteImage(curImg) then
                     stopVoteGlitch("Раунд начался! Картинка карты исчезла, фарм отключен.")
@@ -200,14 +193,12 @@ return function(Window)
                 end
                 if not IsGlitchingVote then break end
 
-                -- 2. Проверка после возможного респавна
                 local _, _, checkImg, checkActive = getVoteCardData(index)
                 if not checkActive or not isValidVoteImage(checkImg) then
                     stopVoteGlitch("Раунд начался! Фарм отключен.")
                     break
                 end
 
-                -- 3. Телепортация на детектор платформы
                 hrp.CFrame = targetPart.CFrame + Vector3.new(0, 2.2, 0)
                 pcall(function()
                     if typeof(firetouchinterest) == "function" then
@@ -215,7 +206,6 @@ return function(Window)
                     end
                 end)
 
-                -- 4. Ожидание ровно 0.8 сек с микро-проверками на старт раунда
                 local timer = 0
                 while timer < 0.8 and IsGlitchingVote do
                     task.wait(0.05)
@@ -228,11 +218,9 @@ return function(Window)
                 end
                 if not IsGlitchingVote then break end
 
-                -- 5. Сброс персонажа
                 pcall(function() hum.Health = 0 end)
                 pcall(function() char:BreakJoints() end)
 
-                -- 6. Ожидание возрождения перед повторением
                 if IsGlitchingVote then
                     waitVoteRespawn()
                     task.wait(0.08)
@@ -253,16 +241,27 @@ return function(Window)
 
     VotingTab:CreateSection("Выбор Карты (Нажмите для фарма)")
 
-    local RayfieldVoteButtons = {}
+    local ButtonWidgets = {}
+    local UniqueTags = {
+        "__XC_VOTE_SLOT_1__",
+        "__XC_VOTE_SLOT_2__",
+        "__XC_VOTE_SLOT_3__"
+    }
 
     for i = 1, 3 do
         local btn = VotingTab:CreateButton({
-            Name = string.format("Карта %d: Ожидание...", i),
+            Name = UniqueTags[i],
             Callback = function()
                 startVoteGlitchLoop(i)
             end
         })
-        RayfieldVoteButtons[i] = btn
+        ButtonWidgets[i] = {
+            ButtonInstance = btn,
+            TextLabel = nil,
+            ImageLabel = nil,
+            LastText = "",
+            LastImage = ""
+        }
     end
 
     VotingTab:CreateSection("Управление")
@@ -275,88 +274,122 @@ return function(Window)
     })
 
     -- ==========================================
-    -- ВНЕДРЕНИЕ КАРТИНОК В КНОПКИ МЕНЮ
+    -- ОДНОКРАТНАЯ ИНЪЕКЦИЯ С ПРЯМЫМ КЭШИРОВАНИЕМ
     -- ==========================================
-    local function findRayfieldGuiInstance()
+    local function getGuiContainer()
         if CoreGui:FindFirstChild("Rayfield") then return CoreGui.Rayfield end
-        if LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild("Rayfield") then
-            return LocalPlayer.PlayerGui.Rayfield
+        if CoreGui:FindFirstChild("XClient") then return CoreGui.XClient end
+        if LocalPlayer:FindFirstChild("PlayerGui") then
+            if LocalPlayer.PlayerGui:FindFirstChild("Rayfield") then return LocalPlayer.PlayerGui.Rayfield end
+            if LocalPlayer.PlayerGui:FindFirstChild("XClient") then return LocalPlayer.PlayerGui.XClient end
         end
-        for _, gui in ipairs(CoreGui:GetChildren()) do
-            if gui:IsA("ScreenGui") and (gui.Name == "Rayfield" or gui.Name:find("XClient") or gui:FindFirstChild("Main", true)) then
-                return gui
+        for _, g in ipairs(CoreGui:GetChildren()) do
+            if g:IsA("ScreenGui") and (g.Name:find("Rayfield") or g.Name:find("XClient")) then
+                return g
             end
         end
         return nil
     end
 
-    local function injectVoteImages()
-        local rfGui = findRayfieldGuiInstance()
-        if not rfGui then return end
+    local injectionDone = false
+    local function setupInjectedButtons()
+        if injectionDone then return true end
 
+        local gui = getGuiContainer()
+        if not gui then return false end
+
+        local foundCount = 0
         for i = 1, 3 do
-            if not InjectedVoteImages[i] then
-                for _, desc in ipairs(rfGui:GetDescendants()) do
-                    if desc:IsA("TextLabel") and desc.Text:find("Карта " .. tostring(i)) then
+            if not ButtonWidgets[i].TextLabel then
+                for _, desc in ipairs(gui:GetDescendants()) do
+                    if desc:IsA("TextLabel") and desc.Text == UniqueTags[i] then
                         local btnContainer = desc.Parent
-                        if btnContainer and (btnContainer:IsA("Frame") or btnContainer:IsA("TextButton")) then
-                            btnContainer.Size = UDim2.new(btnContainer.Size.X.Scale, btnContainer.Size.X.Offset, 0, 52)
-                            desc.Position = UDim2.new(0, 56, desc.Position.Y.Scale, desc.Position.Y.Offset)
-                            desc.Size = UDim2.new(1, -64, desc.Size.Y.Scale, desc.Size.Y.Offset)
+                        if btnContainer then
+                            desc.Text = string.format("Карта %d (Ожидание...)", i)
+                            desc.Position = UDim2.new(0, 46, 0, 0)
+                            desc.Size = UDim2.new(1, -52, 1, 0)
+                            desc.TextXAlignment = Enum.TextXAlignment.Left
+                            desc.TextTruncate = Enum.TextTruncate.AtEnd
 
-                            local img = Instance.new("ImageLabel")
-                            img.Name = "RayfieldMapPreview" .. i
-                            img.Size = UDim2.new(0, 38, 0, 38)
-                            img.Position = UDim2.new(0, 8, 0.5, -19)
-                            img.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-                            img.BorderSizePixel = 0
-                            img.ScaleType = Enum.ScaleType.Crop
-                            img.Parent = btnContainer
+                            local preview = Instance.new("ImageLabel")
+                            preview.Name = "MapIconPreview_" .. i
+                            preview.Size = UDim2.new(0, 32, 0, 32)
+                            preview.Position = UDim2.new(0, 7, 0.5, -16)
+                            preview.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+                            preview.BorderSizePixel = 0
+                            preview.BackgroundTransparency = 0
+                            preview.ZIndex = 25
+                            preview.ScaleType = Enum.ScaleType.Crop
+                            preview.Visible = false
+                            preview.Parent = btnContainer
 
                             local corner = Instance.new("UICorner")
                             corner.CornerRadius = UDim.new(0, 6)
-                            corner.Parent = img
+                            corner.Parent = preview
 
-                            InjectedVoteImages[i] = img
+                            ButtonWidgets[i].TextLabel = desc
+                            ButtonWidgets[i].ImageLabel = preview
+                            foundCount = foundCount + 1
                             break
                         end
                     end
                 end
+            else
+                foundCount = foundCount + 1
             end
         end
+
+        if foundCount == 3 then
+            injectionDone = true
+            return true
+        end
+        return false
     end
 
-    task.delay(0.5, function()
-        injectVoteImages()
+    task.spawn(function()
+        for _ = 1, 10 do
+            if setupInjectedButtons() then break end
+            task.wait(0.5)
+        end
     end)
 
     -- ==========================================
-    -- ОСНОВНОЙ ЦИКЛ ОБНОВЛЕНИЯ
+    -- ОПТИМИЗИРОВАННЫЙ ЦИКЛ ОБНОВЛЕНИЯ (БЕЗ ЛАГОВ)
     -- ==========================================
-    RunService.Heartbeat:Connect(function()
-        if not InjectedVoteImages[1] or not InjectedVoteImages[2] or not InjectedVoteImages[3] then
-            injectVoteImages()
-        end
+    local lastStatusText = ""
 
-        local anyVoteActive = false
-
-        for i = 1, 3 do
-            local mName, vCount, mImg, isCardActive = getVoteCardData(i)
-            if isCardActive then anyVoteActive = true end
-
-            local imgLabel = InjectedVoteImages[i]
-            if imgLabel then
-                if isValidVoteImage(mImg) then
-                    imgLabel.Image = mImg
-                    imgLabel.Visible = true
-                else
-                    imgLabel.Image = ""
-                    imgLabel.Visible = false
-                end
+    task.spawn(function()
+        while task.wait(0.4) do
+            if not injectionDone then
+                setupInjectedButtons()
             end
 
-            local rBtn = RayfieldVoteButtons[i]
-            if rBtn and rBtn.Set then
+            local anyVoteActive = false
+
+            for i = 1, 3 do
+                local mName, vCount, mImg, isCardActive = getVoteCardData(i)
+                if isCardActive then anyVoteActive = true end
+
+                local widget = ButtonWidgets[i]
+
+                -- 1. Обновление изображения
+                if widget.ImageLabel then
+                    if isValidVoteImage(mImg) then
+                        if widget.LastImage ~= mImg then
+                            widget.ImageLabel.Image = mImg
+                            widget.ImageLabel.Visible = true
+                            widget.LastImage = mImg
+                        end
+                    else
+                        if widget.ImageLabel.Visible then
+                            widget.ImageLabel.Image = ""
+                            widget.ImageLabel.Visible = false
+                            widget.LastImage = ""
+                        end
+                    end
+                end
+
+                -- 2. Обновление текста
                 local prefix = ""
                 if IsGlitchingVote and TargetVoteIndex == i then
                     prefix = "[ФАРМИТСЯ] "
@@ -365,27 +398,43 @@ return function(Window)
                 end
 
                 local cleanName = (mName ~= "" and mName ~= "MapName") and mName or ("Карта " .. i)
-                rBtn:Set(string.format("%s%s  (Голосов: %d)", prefix, cleanName, vCount))
-            end
-        end
+                local newButtonText = string.format("%s%s  (Голосов: %d)", prefix, cleanName, vCount)
 
-        if VoteStatusParagraph and VoteStatusParagraph.Set then
+                if widget.LastText ~= newButtonText then
+                    widget.LastText = newButtonText
+                    if widget.TextLabel then
+                        widget.TextLabel.Text = newButtonText
+                    elseif widget.ButtonInstance and widget.ButtonInstance.Set then
+                        widget.ButtonInstance:Set(newButtonText)
+                    end
+                end
+            end
+
+            -- 3. Обновление параграфа статуса
+            local newStatusTitle = ""
+            local newStatusContent = ""
+
             if IsGlitchingVote then
                 local aName = getVoteCardData(TargetVoteIndex)
-                VoteStatusParagraph:Set({
-                    Title = "Фарм Активен!",
-                    Content = string.format("Выбрана карта: %s\nЦикл: ТП -> 0.8с -> Ресет", tostring(aName))
-                })
+                newStatusTitle = "Фарм Активен!"
+                newStatusContent = string.format("Выбрана карта: %s\nЦикл: ТП -> 0.8с -> Ресет", tostring(aName))
             elseif anyVoteActive then
-                VoteStatusParagraph:Set({
-                    Title = "Идёт голосование",
-                    Content = "Картинки карт загружены. Нажмите на нужную карту для запуска глитча."
-                })
+                newStatusTitle = "Идёт голосование"
+                newStatusContent = "Картинки карт загружены. Нажмите на карту для запуска глитча."
             else
-                VoteStatusParagraph:Set({
-                    Title = "Раунд начался",
-                    Content = "Голосование завершено (картинки отсутствуют). Фарм заблокирован."
-                })
+                newStatusTitle = "Раунд начался"
+                newStatusContent = "Голосование недоступно (картинки отсутствуют). Фарм заблокирован."
+            end
+
+            local combinedStatus = newStatusTitle .. newStatusContent
+            if lastStatusText ~= combinedStatus then
+                lastStatusText = combinedStatus
+                if VoteStatusParagraph and VoteStatusParagraph.Set then
+                    VoteStatusParagraph:Set({
+                        Title = newStatusTitle,
+                        Content = newStatusContent
+                    })
+                end
             end
         end
     end)
