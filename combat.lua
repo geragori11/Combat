@@ -5,10 +5,10 @@
 -- ЛОГИКА:
 --   • Auto-Shoot (мастер) ВКЛ  →  R заблокирован.
 --                                HvH toggle  → instant-hit (пуля из хитбокса).
---                                Aim slider  → обычный автоприцел (legit).
---                                HvH и Aim работают независимо друг от друга.
+--                                Aim toggle  → обычный автоприцел (legit).
+--                                HvH и Aim работают независимо.
 --   • Auto-Shoot (мастер) ВЫКЛ →  R делает одиночный выстрел.
---   • Silent slider для килл-эксплойтов: нож достаётся → сигнал → нож убирается.
+--   • Silent toggle — тихое убийство (нож достал → сигнал → убрал).
 -- =========================================================================
 
 return function(Window)
@@ -21,7 +21,7 @@ return function(Window)
 
     -- --- АВТОВЫСТРЕЛ ---
     local AutoShootEnabled = false
-    local AimEnabled = false            -- Aim > 0
+    local AimEnabled = false
     local AutoShootEquip = true
     local IsShooting = false
     local shootOffset = 2.1
@@ -29,7 +29,7 @@ return function(Window)
     local referenceDistance = 30
     local shootCooldown = 1.5
 
-    -- --- HvH (instant hit, "пуля не от пистолета") ---
+    -- --- HvH ---
     local HvHMode = false
     local HvHMaxDistance = 50
     local HvHRequireVisible = true
@@ -286,7 +286,6 @@ return function(Window)
         local spawnDir = (speed > 3) and -velocity.Unit or mRoot.CFrame.LookVector
         local spawnDist = math.clamp(2 - speed * 0.02, 0.4, 2)
 
-        -- Все выстрелы в одном тике, спавн — В ХИТБОКСЕ (не из ствола пистолета)
         for _, part in ipairs(bodyParts) do
             local predictedPos = part.Position + velocity * ping
             local originCFrame = CFrame.new(predictedPos + spawnDir * spawnDist)
@@ -388,7 +387,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- 9. HvH SHOT (instant-hit, независимо от Aim)
+    -- 9. HvH SHOT
     -- ==========================================
     local function tryHvHShot(targetChar, gun)
         if not HvHMode or not targetChar or not gun then return false end
@@ -428,12 +427,12 @@ return function(Window)
         end
     })
 
-    CombatTab:CreateSlider({
-        Name = "Aim (0 = выкл, >0 = вкл)",
-        Range = {0, 100}, Increment = 1, CurrentValue = 0,
-        Flag = "AimSlider",
+    CombatTab:CreateToggle({
+        Name = "Aim (автоприцел)",
+        CurrentValue = false,
+        Flag = "AimToggle",
         Callback = function(Value)
-            AimEnabled = (Value > 0)
+            AimEnabled = Value
         end
     })
 
@@ -523,12 +522,12 @@ return function(Window)
     -- ==========================================
     CombatTab:CreateSection("Murderer Exploits (Remote Spoof)")
 
-    CombatTab:CreateSlider({
-        Name = "Silent (0 = выкл, >0 = вкл)",
-        Range = {0, 100}, Increment = 1, CurrentValue = 0,
-        Flag = "SilentKillSlider",
+    CombatTab:CreateToggle({
+        Name = "Silent (тихое убийство)",
+        CurrentValue = false,
+        Flag = "SilentKillToggle",
         Callback = function(Value)
-            silentKill = (Value > 0)
+            silentKill = Value
         end
     })
 
@@ -774,7 +773,7 @@ return function(Window)
             return
         end
 
-        -- === LEGIT AIM (нужен Aim > 0) ===
+        -- === LEGIT AIM (нужен Aim toggle) ===
         if not AimEnabled then return end
 
         local visiblePart = getVisiblePart(murderer.Character)
