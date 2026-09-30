@@ -35,20 +35,20 @@ return function(Window)
     local DebugDumpEnabled = false
     local DumpedMapsCache = {}
 
-    -- Актуальный список карт MM2
+    -- Актуальный список карт MM2 (обновлён по дампам mm2maps/)
     local MM2_MAPS = {
-        { Name = "Bio Lab", Image = "rbxassetid://290458317" },
-        { Name = "Factory", Image = "rbxassetid://290458428" },
-        { Name = "Hospital 3", Image = "rbxassetid://290458564" },
-        { Name = "Hotel", Image = "rbxassetid://290458679" },
-        { Name = "House 2", Image = "rbxassetid://290458823" },
-        { Name = "Mansion 2", Image = "rbxassetid://290458948" },
-        { Name = "Milbase", Image = "rbxassetid://290459067" },
-        { Name = "Office 3", Image = "" },
-        { Name = "Police Station", Image = "rbxassetid://290459483" },
-        { Name = "Research Facility", Image = "rbxassetid://290459632" },
-        { Name = "Workplace", Image = "rbxassetid://290459765" },
-        { Name = "Bank 2", Image = "rbxassetid://290458189" }
+        { Name = "Bio Lab",           Image = "rbxassetid://3214475802" },
+        { Name = "Factory",           Image = "rbxassetid://3214476069" },
+        { Name = "Hospital 3",        Image = "rbxassetid://3214476562" },
+        { Name = "Hotel 2",           Image = "rbxassetid://3214477063" },
+        { Name = "House 2",           Image = "rbxassetid://3214477411" },
+        { Name = "Mansion 2",         Image = "rbxassetid://3214477676" },
+        { Name = "Mil Base",          Image = "rbxassetid://3214477899" },
+        { Name = "Office 3",          Image = "rbxassetid://3214478924" },
+        { Name = "Police Station",    Image = "rbxassetid://3214479176" },
+        { Name = "Research Facility", Image = "rbxassetid://4751350477" },
+        { Name = "Workplace",         Image = "rbxassetid://3214479481" },
+        { Name = "Bank 2",            Image = "rbxassetid://3214475169" }
     }
 
     for _, mapData in ipairs(MM2_MAPS) do
