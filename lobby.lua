@@ -24,49 +24,52 @@ return function(Window)
     local TargetVoteIndex = nil
     local CurrentVoteThread = nil
     local HiddenOverlays = {}
+    local OverlayConnection = nil
 
     -- ==========================================
-    -- УПРАВЛЕНИЕ ОВЕРЛЕЯМИ И ЭКРАНОМ
+    -- БЫСТРОЕ И ЛЁГКОЕ ОТКЛЮЧЕНИЕ ОВЕРЛЕЕВ
     -- ==========================================
+    local function isOverlayName(name)
+        local n = name:lower()
+        return n:find("fade")
+            or n:find("black")
+            or n:find("overlay")
+            or n:find("blind")
+            or n:find("death")
+            or n:find("vignette")
+            or n:find("loading")
+            or n:find("transition")
+            or n:find("intro")
+    end
+
+    local function handleGuiObject(gui)
+        if not gui then return end
+        if gui:IsA("ScreenGui") then
+            if isOverlayName(gui.Name) and gui.Enabled then
+                HiddenOverlays[gui] = true
+                gui.Enabled = false
+            else
+                for _, child in ipairs(gui:GetChildren()) do
+                    if (child:IsA("Frame") or child:IsA("ImageLabel")) and isOverlayName(child.Name) and child.Visible then
+                        HiddenOverlays[child] = true
+                        child.Visible = false
+                    end
+                end
+            end
+        end
+    end
+
     local function suppressOverlays()
         local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         if playerGui then
-            local blacklistedGuis = {
-                ["Fade"] = true,
-                ["FadeGui"] = true,
-                ["Blackout"] = true,
-                ["Loading"] = true,
-                ["Transition"] = true,
-                ["Intro"] = true,
-                ["DeathEffect"] = true,
-                ["Vignette"] = true,
-                ["BlindGui"] = true
-            }
-
             for _, gui in ipairs(playerGui:GetChildren()) do
-                if gui:IsA("ScreenGui") then
-                    if blacklistedGuis[gui.Name] and gui.Enabled then
-                        HiddenOverlays[gui] = true
-                        gui.Enabled = false
-                    else
-                        for _, desc in ipairs(gui:GetDescendants()) do
-                            if desc:IsA("Frame") or desc:IsA("ImageLabel") then
-                                local nameLower = desc.Name:lower()
-                                if (nameLower:find("fade") or nameLower:find("black") or nameLower:find("overlay") or nameLower:find("blind") or nameLower:find("death")) and desc.Visible then
-                                    HiddenOverlays[desc] = true
-                                    desc.Visible = false
-                                end
-                            end
-                        end
-                    end
-                end
+                handleGuiObject(gui)
             end
         end
 
         for _, effect in ipairs(Lighting:GetChildren()) do
             if (effect:IsA("BlurEffect") or effect:IsA("ColorCorrectionEffect")) and effect.Enabled then
-                local eName = effect.Name:lower()
-                if eName:find("fade") or eName:find("blur") or eName:find("death") or eName:find("black") then
+                if isOverlayName(effect.Name) then
                     HiddenOverlays[effect] = true
                     effect.Enabled = false
                 end
@@ -77,14 +80,34 @@ return function(Window)
         if camera then
             for _, effect in ipairs(camera:GetChildren()) do
                 if (effect:IsA("BlurEffect") or effect:IsA("ColorCorrectionEffect")) and effect.Enabled then
-                    HiddenOverlays[effect] = true
-                    effect.Enabled = false
+                    if isOverlayName(effect.Name) then
+                        HiddenOverlays[effect] = true
+                        effect.Enabled = false
+                    end
                 end
             end
         end
     end
 
+    local function enableOverlayProtection()
+        suppressOverlays()
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if playerGui and not OverlayConnection then
+            OverlayConnection = playerGui.ChildAdded:Connect(function(child)
+                if IsGlitchingVote then
+                    task.wait()
+                    handleGuiObject(child)
+                end
+            end)
+        end
+    end
+
     local function restoreOverlays()
+        if OverlayConnection then
+            OverlayConnection:Disconnect()
+            OverlayConnection = nil
+        end
+
         for obj, _ in pairs(HiddenOverlays) do
             pcall(function()
                 if obj and obj.Parent then
@@ -190,27 +213,26 @@ return function(Window)
         return mapName, votesCount, mapImage, isVotingActive
     end
 
-    local function getVoteAliveCharacter()
-        local char = LocalPlayer.Character
-        if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChildOfClass("Humanoid") then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum.Health > 0 then
-                return char, char.HumanoidRootPart, hum
+    -- ==========================================
+    -- БЫСТРОЕ ОЖИДАНИЕ ПЕРСОНАЖА (КАЖДЫЕ 0.01 СЕК)
+    -- ==========================================
+    local function waitVoteRespawnFast(oldChar)
+        while IsGlitchingVote do
+            local char = LocalPlayer.Character
+            if char and char ~= oldChar and char.Parent == workspace then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hrp and hum and hum.Health > 0 then
+                    return char, hrp, hum
+                end
             end
+            task.wait(0.01)
         end
         return nil, nil, nil
     end
 
-    local function waitVoteRespawn()
-        local newChar = LocalPlayer.CharacterAdded:Wait()
-        local hrp = newChar:WaitForChild("HumanoidRootPart", 10)
-        local hum = newChar:WaitForChild("Humanoid", 10)
-        task.wait(0.15)
-        return newChar, hrp, hum
-    end
-
     -- ==========================================
-    -- УПРАВЛЕНИЕ ГЛИТЧЕМ (ТП СТОЯ -> 0.4с -> Ресет)
+    -- УПРАВЛЕНИЕ ГЛИТЧЕМ (ТП СТОЯ -> 0.2с -> ЧЕК -> РЕСЕТ -> ЧЕК 0.01с)
     -- ==========================================
     local function stopVoteGlitch(reason)
         if not IsGlitchingVote and not CurrentVoteThread then return end
@@ -252,10 +274,12 @@ return function(Window)
             CurrentVoteThread = nil
         end
 
-        CurrentVoteThread = task.spawn(function()
-            while IsGlitchingVote do
-                suppressOverlays()
+        enableOverlayProtection()
 
+        CurrentVoteThread = task.spawn(function()
+            local currentChar = LocalPlayer.Character
+
+            while IsGlitchingVote do
                 local _, _, curImg, curActive = getVoteCardData(index)
                 if not curActive or not isValidVoteImage(curImg) then
                     stopVoteGlitch("Раунд начался! Картинка карты исчезла, фарм отключен.")
@@ -264,23 +288,23 @@ return function(Window)
 
                 local targetPart = getVoteTargetPart(index)
                 if not targetPart then
-                    task.wait(0.5)
+                    task.wait(0.2)
                     continue
                 end
 
-                local char, hrp, hum = getVoteAliveCharacter()
-                if not char or not hrp or not hum then
-                    char, hrp, hum = waitVoteRespawn()
-                end
-                if not IsGlitchingVote then break end
+                -- Ожидание и получение живого персонажа с проверкой каждые 0.01с
+                local char = LocalPlayer.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
 
-                local _, _, checkImg, checkActive = getVoteCardData(index)
-                if not checkActive or not isValidVoteImage(checkImg) then
-                    stopVoteGlitch("Раунд начался! Фарм отключен.")
-                    break
+                if not char or not hrp or not hum or hum.Health <= 0 or char.Parent ~= workspace then
+                    char, hrp, hum = waitVoteRespawnFast(currentChar)
                 end
+                if not IsGlitchingVote or not char or not hrp or not hum then break end
 
-                -- Телепортация строго вертикально (стоя) и гашение инерции
+                currentChar = char
+
+                -- Телепортация строго вертикально (стоя) и сброс импульса
                 local targetPosition = targetPart.Position + Vector3.new(0, 3.2, 0)
                 hrp.CFrame = CFrame.new(targetPosition)
                 hrp.AssemblyLinearVelocity = Vector3.zero
@@ -296,26 +320,29 @@ return function(Window)
                     end
                 end)
 
-                local timer = 0
-                while timer < 0.4 and IsGlitchingVote do
-                    task.wait(0.05)
-                    timer = timer + 0.05
-                    suppressOverlays()
-
-                    local _, _, mImg, mActive = getVoteCardData(index)
-                    if not mActive or not isValidVoteImage(mImg) then
-                        stopVoteGlitch("Раунд начался во время ожидания! Фарм отключен.")
-                        break
-                    end
-                end
+                -- Ожидание 0.2 секунды
+                task.wait(0.2)
                 if not IsGlitchingVote then break end
 
+                -- Проверка, что персонаж остался на нужном месте
+                if (hrp.Position - targetPosition).Magnitude > 5 then
+                    hrp.CFrame = CFrame.new(targetPosition)
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                    pcall(function()
+                        if typeof(firetouchinterest) == "function" then
+                            firetouchinterest(hrp, targetPart, 0)
+                        end
+                    end)
+                end
+
+                -- Ресет персонажа
                 pcall(function() hum.Health = 0 end)
                 pcall(function() char:BreakJoints() end)
 
+                -- Быстрое ожидание нового персонажа с тиком 0.01с
                 if IsGlitchingVote then
-                    waitVoteRespawn()
-                    task.wait(0.08)
+                    currentChar, _, _ = waitVoteRespawnFast(currentChar)
                 end
             end
         end)
@@ -642,7 +669,7 @@ return function(Window)
             if IsGlitchingVote then
                 local aName = getVoteCardData(TargetVoteIndex)
                 newStatusTitle = "Фарм Активен!"
-                newStatusContent = string.format("Карта: %s (ТП -> 0.4с -> Ресет)", tostring(aName))
+                newStatusContent = string.format("Карта: %s (ТП -> 0.2с -> Ресет)", tostring(aName))
             elseif anyVoteActive then
                 newStatusTitle = "Идёт голосование"
                 newStatusContent = "Картинки карт доступны. Нажмите «ВЫБРАТЬ» под нужной картой."
