@@ -35,6 +35,7 @@ return function(Window)
     local DebugDumpEnabled = false
     local DumpedMapsCache = {}
 
+    -- Актуальный список карт MM2
     local MM2_MAPS = {
         { Name = "Bio Lab", Image = "rbxassetid://290458317" },
         { Name = "Factory", Image = "rbxassetid://290458428" },
@@ -43,15 +44,11 @@ return function(Window)
         { Name = "House 2", Image = "rbxassetid://290458823" },
         { Name = "Mansion 2", Image = "rbxassetid://290458948" },
         { Name = "Milbase", Image = "rbxassetid://290459067" },
-        { Name = "Museum", Image = "rbxassetid://290459194" },
-        { Name = "Office 2", Image = "rbxassetid://290459345" },
+        { Name = "Office 3", Image = "" },
         { Name = "Police Station", Image = "rbxassetid://290459483" },
         { Name = "Research Facility", Image = "rbxassetid://290459632" },
         { Name = "Workplace", Image = "rbxassetid://290459765" },
-        { Name = "Bank 2", Image = "rbxassetid://290458189" },
-        { Name = "Mineshaft", Image = "rbxassetid://1057424911" },
-        { Name = "Ghost Town", Image = "rbxassetid://3145455827" },
-        { Name = "Log Cabin", Image = "rbxassetid://3984443171" }
+        { Name = "Bank 2", Image = "rbxassetid://290458189" }
     }
 
     for _, mapData in ipairs(MM2_MAPS) do
@@ -72,14 +69,14 @@ return function(Window)
         if typeof(writefile) ~= "function" then return end
 
         pcall(function()
-            if typeof(isfolder) == "function" and typeof(makefolder) == "function" then
-                if not isfolder("mm2maps") then
+            pcall(function()
+                if typeof(makefolder) == "function" then
                     makefolder("mm2maps")
                 end
-            end
+            end)
 
             local cleanName = sanitizeFilename(mapName)
-            if cleanName == "" or cleanName:find("Карта") or cleanName:find("Ожидание") then
+            if cleanName == "" or cleanName == "Ожидание..." or cleanName == "Ожидание" then
                 return
             end
 
@@ -93,7 +90,19 @@ return function(Window)
             local fileData = string.format("Название: %s\nID Картинки: %s\nВремя: %s\n", tostring(mapName), tostring(imageId), os.date("%X"))
             
             writefile(filePath, fileData)
-            Notify("Отладка MM2", "Сохранены данные карты: " .. cleanName, 2)
+
+            -- Дополнительно пишем в общий лог-файл
+            pcall(function()
+                local logPath = "mm2maps/dump_log.txt"
+                local existing = ""
+                if typeof(readfile) == "function" then
+                    pcall(function() existing = readfile(logPath) end)
+                end
+                writefile(logPath, existing .. string.format("[%s] Карта: %s | ImageID: %s\n", os.date("%X"), tostring(mapName), tostring(imageId)))
+            end)
+
+            Notify("Отладка MM2", "Сдамплена карта: " .. cleanName, 2.5)
+            print("[XClient Debug] Сдамплена карта: " .. cleanName .. " | ID: " .. tostring(imageId))
         end)
     end
 
@@ -194,32 +203,76 @@ return function(Window)
     end
 
     -- ==========================================
-    -- ПОИСК ОБЪЕКТОВ ЛОББИ MM2
+    -- ПОИСК ОБЪЕКТОВ ЛОББИ И КАРТ MM2
     -- ==========================================
     local function getLobby()
         return workspace:FindFirstChild("RegularLobby")
+            or workspace:FindFirstChild("NormalLobby")
             or workspace:FindFirstChild("Lobby")
             or workspace:FindFirstChild("ChristmasLobby")
             or workspace:FindFirstChild("HalloweenLobby")
     end
 
-    local function getVoteTargetPart(index)
+    local function getVotePadModel(index)
         local lobby = getLobby()
-        if not lobby then return nil end
+        local sIdx = tostring(index)
 
-        local votePads = lobby:FindFirstChild("VotePads")
-        if votePads then
-            local detector = votePads:FindFirstChild("Detector" .. tostring(index))
-            if detector and detector:IsA("BasePart") then
-                return detector
+        if lobby then
+            local votePads = lobby:FindFirstChild("VotePads")
+            if votePads then
+                local pad = votePads:FindFirstChild("VotePad" .. sIdx)
+                    or votePads:FindFirstChild("Pad" .. sIdx)
+                    or votePads:FindFirstChild(sIdx)
+                if pad then return pad end
+            end
+
+            local directPad = lobby:FindFirstChild("VotePad" .. sIdx)
+                or lobby:FindFirstChild("Pad" .. sIdx)
+            if directPad then return directPad end
+
+            for _, desc in ipairs(lobby:GetDescendants()) do
+                if desc.Name == "VotePad" .. sIdx or desc.Name == "VotePad_" .. sIdx then
+                    return desc
+                end
             end
         end
 
-        local padModel = lobby:FindFirstChild("VotePad" .. tostring(index))
+        local globalVotePads = workspace:FindFirstChild("VotePads")
+        if globalVotePads then
+            local pad = globalVotePads:FindFirstChild("VotePad" .. sIdx)
+                or globalVotePads:FindFirstChild("Pad" .. sIdx)
+                or globalVotePads:FindFirstChild(sIdx)
+            if pad then return pad end
+        end
+
+        return nil
+    end
+
+    local function getVoteTargetPart(index)
+        local padModel = getVotePadModel(index)
         if padModel then
-            local pad = padModel:FindFirstChild("Pad")
-            if pad and pad:IsA("BasePart") then
-                return pad
+            local detector = padModel:FindFirstChild("Detector" .. tostring(index))
+                or padModel:FindFirstChild("Detector")
+                or padModel:FindFirstChild("Pad")
+            if detector and detector:IsA("BasePart") then
+                return detector
+            end
+            if padModel:IsA("BasePart") then
+                return padModel
+            end
+            local anyPart = padModel:FindFirstChildWhichIsA("BasePart")
+            if anyPart then return anyPart end
+        end
+
+        local lobby = getLobby()
+        if lobby then
+            local votePads = lobby:FindFirstChild("VotePads")
+            if votePads then
+                local detector = votePads:FindFirstChild("Detector" .. tostring(index))
+                    or votePads:FindFirstChild("Pad" .. tostring(index))
+                if detector and detector:IsA("BasePart") then
+                    return detector
+                end
             end
         end
 
@@ -234,51 +287,63 @@ return function(Window)
         return true
     end
 
-    local function findImageInInstance(inst)
-        if not inst then return nil end
+    local function extractMapInfoFromInstance(inst)
+        if not inst then return nil, nil, nil end
+        local mapName = nil
+        local votesCount = nil
+        local mapImage = nil
+
         for _, desc in ipairs(inst:GetDescendants()) do
-            if desc:IsA("ImageLabel") or desc:IsA("Decal") then
-                local img = desc:IsA("ImageLabel") and desc.Image or desc.Texture
-                if typeof(img) == "string" and #img > 5 and isValidVoteImage(img) then
-                    return img
+            if desc:IsA("TextLabel") then
+                local text = desc.Text:gsub("^%s+", ""):gsub("%s+$", "")
+                local textLower = text:lower()
+                local nameLower = desc.Name:lower()
+
+                if nameLower:find("vote") or nameLower:find("count") then
+                    local num = tonumber(text:match("%d+"))
+                    if num then votesCount = num end
+                elseif nameLower == "mapname" or nameLower == "maptitle" or nameLower == "title" or nameLower == "map" then
+                    if text ~= "" and text ~= "MapName" and text ~= "MAP NAME" then
+                        mapName = text
+                    end
+                elseif not mapName and text ~= "" and not textLower:find("vote") and not textLower:find("голос")
+                    and not text:match("^%d+$") and textLower ~= "map name" and textLower ~= "mapname"
+                    and textLower ~= "раунд идёт" and textLower ~= "ожидание" then
+                    mapName = text
+                end
+            elseif desc:IsA("ImageLabel") or desc:IsA("Decal") then
+                if not mapImage then
+                    local img = desc:IsA("ImageLabel") and desc.Image or desc.Texture
+                    if typeof(img) == "string" and #img > 5 and isValidVoteImage(img) then
+                        mapImage = img
+                    end
                 end
             end
         end
-        return nil
+
+        return mapName, votesCount, mapImage
     end
 
     local function getVoteCardData(index)
         local lobby = getLobby()
         if not lobby then return "Карта " .. index, 0, "", false end
 
-        local mapName = "Ожидание..."
-        local votesCount = 0
-        local mapImage = ""
+        local sIdx = tostring(index)
+        local padModel = getVotePadModel(index)
 
-        local votePadModel = lobby:FindFirstChild("VotePad" .. tostring(index))
-        if votePadModel then
-            local voteInfoGui = votePadModel:FindFirstChild("VoteInfoGui")
-            local container = voteInfoGui and voteInfoGui:FindFirstChild("Container")
-            if container then
-                local nameLabel = container:FindFirstChild("MapName")
-                local votesLabel = container:FindFirstChild("Votes")
-                if nameLabel and nameLabel.Text ~= "" and nameLabel.Text ~= "MapName" and nameLabel.Text ~= "MAP NAME" then
-                    mapName = nameLabel.Text
-                end
-                if votesLabel then
-                    votesCount = tonumber(votesLabel.Text:match("%d+")) or 0
-                end
-            end
+        local name1, votes1, img1 = extractMapInfoFromInstance(padModel)
 
-            mapImage = findImageInInstance(votePadModel) or ""
+        local iconModel = nil
+        if lobby:FindFirstChild("VoteIcons") then
+            iconModel = lobby.VoteIcons:FindFirstChild("VotePad" .. sIdx)
+                or lobby.VoteIcons:FindFirstChild("Pad" .. sIdx)
+                or lobby.VoteIcons:FindFirstChild(sIdx)
         end
+        local name2, votes2, img2 = extractMapInfoFromInstance(iconModel)
 
-        if not isValidVoteImage(mapImage) and lobby:FindFirstChild("VoteIcons") then
-            local padIcon = lobby.VoteIcons:FindFirstChild("VotePad" .. tostring(index))
-            if padIcon then
-                mapImage = findImageInInstance(padIcon) or ""
-            end
-        end
+        local mapName = name1 or name2 or ("Карта " .. index)
+        local votesCount = votes1 or votes2 or 0
+        local mapImage = img1 or img2 or ""
 
         local isVotingActive = isValidVoteImage(mapImage)
         return mapName, votesCount, mapImage, isVotingActive
@@ -694,7 +759,7 @@ return function(Window)
         Callback = function(Value)
             DebugDumpEnabled = Value
             if Value then
-                Notify("Отладка MM2", "Дамп включен! Файлы карт сохраняются в mm2maps/", 3)
+                Notify("Отладка MM2", "Дамп включен! Карты сохраняются в mm2maps/", 3)
             else
                 Notify("Отладка MM2", "Дамп карт отключен", 2)
             end
@@ -707,8 +772,8 @@ return function(Window)
 
         local isSelected = SelectedAutoMaps[mapName] == true
         if isSelected then
-            cardInfo.Card.BackgroundColor3 = Color3.fromRGB(20, 52, 32)
-            cardInfo.Stroke.Color = Color3.fromRGB(50, 220, 100)
+            cardInfo.Card.BackgroundColor3 = Color3.fromRGB(24, 58, 36)
+            cardInfo.Stroke.Color = Color3.fromRGB(55, 230, 110)
             cardInfo.Stroke.Thickness = 1.8
         else
             cardInfo.Card.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
