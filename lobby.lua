@@ -29,29 +29,30 @@ return function(Window)
     local AutoVoteEnabled = false
     local AutoVotedInCurrentSession = false
     local SelectedAutoMaps = {}
-    local MapToggles = {}
+    local AutoMapCards = {}
 
+    -- Список карт MM2 с их базовыми Asset ID изображений
     local MM2_MAPS = {
-        "Bio Lab",
-        "Factory",
-        "Hospital 3",
-        "Hotel",
-        "House 2",
-        "Mansion 2",
-        "Milbase",
-        "Museum",
-        "Office 2",
-        "Police Station",
-        "Research Facility",
-        "Workplace",
-        "Bank 2",
-        "Mineshaft",
-        "Ghost Town",
-        "Log Cabin"
+        { Name = "Bio Lab", Image = "rbxassetid://290458317" },
+        { Name = "Factory", Image = "rbxassetid://290458428" },
+        { Name = "Hospital 3", Image = "rbxassetid://290458564" },
+        { Name = "Hotel", Image = "rbxassetid://290458679" },
+        { Name = "House 2", Image = "rbxassetid://290458823" },
+        { Name = "Mansion 2", Image = "rbxassetid://290458948" },
+        { Name = "Milbase", Image = "rbxassetid://290459067" },
+        { Name = "Museum", Image = "rbxassetid://290459194" },
+        { Name = "Office 2", Image = "rbxassetid://290459345" },
+        { Name = "Police Station", Image = "rbxassetid://290459483" },
+        { Name = "Research Facility", Image = "rbxassetid://290459632" },
+        { Name = "Workplace", Image = "rbxassetid://290459765" },
+        { Name = "Bank 2", Image = "rbxassetid://290458189" },
+        { Name = "Mineshaft", Image = "rbxassetid://1057424911" },
+        { Name = "Ghost Town", Image = "rbxassetid://3145455827" },
+        { Name = "Log Cabin", Image = "rbxassetid://3984443171" }
     }
 
-    for _, mapName in ipairs(MM2_MAPS) do
-        SelectedAutoMaps[mapName] = false
+    for _, mapData in ipairs(MM2_MAPS) do
+        SelectedAutoMaps[mapData.Name] = false
     end
 
     -- ==========================================
@@ -266,7 +267,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- БЫСТРОЕ ОЖИДАНИЕ ПЕРСОНАЖА (КАЖДЫЕ 0.01 СЕК)
+    -- БЫСТРОЕ ОЖИДАНИЕ ПЕРСОНАЖА (0.01 СЕК)
     -- ==========================================
     local function waitVoteRespawnFast(oldChar)
         while IsGlitchingVote do
@@ -284,7 +285,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- УПРАВЛЕНИЕ ГЛИТЧЕМ (ТП СТОЯ -> 0.2с -> ЧЕК -> РЕСЕТ -> ЧЕК 0.01с)
+    -- УПРАВЛЕНИЕ ГЛИТЧЕМ (ТП СТОЯ -> 0.2с -> РЕСЕТ)
     -- ==========================================
     local function stopVoteGlitch(reason)
         if not IsGlitchingVote and not CurrentVoteThread then return end
@@ -395,42 +396,14 @@ return function(Window)
     end
 
     -- ==========================================
-    -- ИНТЕРФЕЙС ВКЛАДКИ
+    -- УНИВЕРСАЛЬНЫЙ ПОИСК КОНТЕЙНЕРА В RAYFIELD
     -- ==========================================
-    VotingTab:CreateSection("Инфо")
-
-    local VoteStatusParagraph = VotingTab:CreateParagraph({
-        Title = "Статус системы",
-        Content = "Ожидание раунда голосования..."
-    })
-
-    VotingTab:CreateButton({
-        Name = "🛑 ОСТАНОВИТЬ ФАРМ",
-        Callback = function()
-            stopVoteGlitch()
-        end
-    })
-
-    VotingTab:CreateSection("Карты Лобби")
-
-    local UNIQUE_ROW_TAG = "HORIZONTAL_ROW_CONTAINER_VOTE"
-
-    local HostParagraph = VotingTab:CreateParagraph({
-        Title = UNIQUE_ROW_TAG,
-        Content = " "
-    })
-
-    local HorizontalCards = {}
-
-    -- ==========================================
-    -- ИНЪЕКЦИЯ ГОРИЗОНТАЛЬНОЙ ПАНЕЛИ
-    -- ==========================================
-    local function getHostFrame()
+    local function findContainerByTag(paragraphObj, tag)
         local getupvals = debug.getupvalues or getupvalues
-        if getupvals and HostParagraph and type(HostParagraph.Set) == "function" then
+        if getupvals and paragraphObj and type(paragraphObj.Set) == "function" then
             local found = nil
             pcall(function()
-                for _, uv in pairs(getupvals(HostParagraph.Set)) do
+                for _, uv in pairs(getupvals(paragraphObj.Set)) do
                     if typeof(uv) == "Instance" and (uv:IsA("Frame") or uv:IsA("GuiObject")) then
                         found = uv
                         break
@@ -461,7 +434,7 @@ return function(Window)
             local match = nil
             pcall(function()
                 for _, desc in ipairs(root:GetDescendants()) do
-                    if desc:IsA("TextLabel") and desc.Text:find(UNIQUE_ROW_TAG) then
+                    if desc:IsA("TextLabel") and desc.Text:find(tag) then
                         match = desc.Parent
                         break
                     end
@@ -472,8 +445,35 @@ return function(Window)
         return nil
     end
 
+    -- ==========================================
+    -- ИНТЕРФЕЙС ВКЛАДКИ
+    -- ==========================================
+    VotingTab:CreateSection("Инфо")
+
+    local VoteStatusParagraph = VotingTab:CreateParagraph({
+        Title = "Статус системы",
+        Content = "Ожидание раунда голосования..."
+    })
+
+    VotingTab:CreateButton({
+        Name = "🛑 ОСТАНОВИТЬ ФАРМ",
+        Callback = function()
+            stopVoteGlitch()
+        end
+    })
+
+    VotingTab:CreateSection("Карты Лобби")
+
+    local UNIQUE_ROW_TAG = "HORIZONTAL_ROW_CONTAINER_VOTE"
+    local HostParagraph = VotingTab:CreateParagraph({
+        Title = UNIQUE_ROW_TAG,
+        Content = " "
+    })
+
+    local HorizontalCards = {}
+
     local function setupHorizontalRow()
-        local host = getHostFrame()
+        local host = findContainerByTag(HostParagraph, UNIQUE_ROW_TAG)
         if not host then return false end
 
         for _, child in ipairs(host:GetChildren()) do
@@ -626,15 +626,8 @@ return function(Window)
         return true
     end
 
-    task.spawn(function()
-        for _ = 1, 15 do
-            if setupHorizontalRow() then break end
-            task.wait(0.3)
-        end
-    end)
-
     -- ==========================================
-    -- ПОДВКЛАДКА: АВТОВЫБОР КАРТЫ
+    -- ПОДВКЛАДКА: АВТОВЫБОР КАРТЫ С ИЗОБРАЖЕНИЯМИ
     -- ==========================================
     VotingTab:CreateSection("Автовыбор карты")
 
@@ -652,16 +645,30 @@ return function(Window)
         end
     })
 
+    local function updateCardVisual(mapName)
+        local cardInfo = AutoMapCards[mapName]
+        if not cardInfo then return end
+
+        local isSelected = SelectedAutoMaps[mapName] == true
+        if isSelected then
+            cardInfo.Card.BackgroundColor3 = Color3.fromRGB(20, 52, 32)
+            cardInfo.Stroke.Color = Color3.fromRGB(50, 220, 100)
+            cardInfo.Status.Text = "ВЫБРАНА"
+            cardInfo.Status.TextColor3 = Color3.fromRGB(80, 240, 140)
+        else
+            cardInfo.Card.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+            cardInfo.Stroke.Color = Color3.fromRGB(44, 44, 52)
+            cardInfo.Status.Text = "НАЖМИТЕ ДЛЯ ВЫБОРА"
+            cardInfo.Status.TextColor3 = Color3.fromRGB(120, 120, 135)
+        end
+    end
+
     VotingTab:CreateButton({
         Name = "Выбрать все карты",
         Callback = function()
-            for mapName, tgl in pairs(MapToggles) do
-                SelectedAutoMaps[mapName] = true
-                pcall(function()
-                    if tgl and tgl.Set then
-                        tgl:Set(true)
-                    end
-                end)
+            for _, mapData in ipairs(MM2_MAPS) do
+                SelectedAutoMaps[mapData.Name] = true
+                updateCardVisual(mapData.Name)
             end
             Notify("Автовыбор", "Все карты выбраны!", 1.5)
         end
@@ -670,30 +677,166 @@ return function(Window)
     VotingTab:CreateButton({
         Name = "Снять выбор со всех",
         Callback = function()
-            for mapName, tgl in pairs(MapToggles) do
-                SelectedAutoMaps[mapName] = false
-                pcall(function()
-                    if tgl and tgl.Set then
-                        tgl:Set(false)
-                    end
-                end)
+            for _, mapData in ipairs(MM2_MAPS) do
+                SelectedAutoMaps[mapData.Name] = false
+                updateCardVisual(mapData.Name)
             end
             Notify("Автовыбор", "Выбор со всех карт сброшен!", 1.5)
         end
     })
 
-    for _, mapName in ipairs(MM2_MAPS) do
-        local safeFlag = "AutoVote_Map_" .. mapName:gsub("%s+", "_")
-        local tgl = VotingTab:CreateToggle({
-            Name = mapName,
-            CurrentValue = false,
-            Flag = safeFlag,
-            Callback = function(Value)
-                SelectedAutoMaps[mapName] = Value
+    local UNIQUE_AUTO_GRID_TAG = "AUTO_MAP_GRID_CONTAINER"
+    local AutoGridParagraph = VotingTab:CreateParagraph({
+        Title = UNIQUE_AUTO_GRID_TAG,
+        Content = " "
+    })
+
+    local function setupAutoMapGrid()
+        local host = findContainerByTag(AutoGridParagraph, UNIQUE_AUTO_GRID_TAG)
+        if not host then return false end
+
+        for _, child in ipairs(host:GetChildren()) do
+            if child:IsA("TextLabel") then
+                child.Visible = false
             end
-        })
-        MapToggles[mapName] = tgl
+        end
+
+        local rayfieldPadding = host:FindFirstChildOfClass("UIPadding")
+        if rayfieldPadding then
+            rayfieldPadding.PaddingTop = UDim.new(0, 0)
+            rayfieldPadding.PaddingBottom = UDim.new(0, 0)
+            rayfieldPadding.PaddingLeft = UDim.new(0, 0)
+            rayfieldPadding.PaddingRight = UDim.new(0, 0)
+        end
+
+        host.Size = UDim2.new(1, 0, 0, 275)
+        host.ClipsDescendants = true
+        host.BackgroundTransparency = 1
+
+        local oldGrid = host:FindFirstChild("AutoMapScroll")
+        if oldGrid then oldGrid:Destroy() end
+
+        local scroll = Instance.new("ScrollingFrame")
+        scroll.Name = "AutoMapScroll"
+        scroll.Size = UDim2.new(1, 0, 1, 0)
+        scroll.Position = UDim2.new(0, 0, 0, 0)
+        scroll.BackgroundTransparency = 1
+        scroll.BorderSizePixel = 0
+        scroll.ScrollBarThickness = 4
+        scroll.ScrollBarImageColor3 = Color3.fromRGB(75, 75, 95)
+        scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+        scroll.Parent = host
+
+        local gridLayout = Instance.new("UIGridLayout")
+        gridLayout.CellSize = UDim2.new(0.485, 0, 0, 56)
+        gridLayout.CellPadding = UDim2.new(0.025, 0, 0, 7)
+        gridLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        gridLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        gridLayout.Parent = scroll
+
+        local gridPadding = Instance.new("UIPadding")
+        gridPadding.PaddingTop = UDim.new(0, 4)
+        gridPadding.PaddingBottom = UDim.new(0, 8)
+        gridPadding.PaddingLeft = UDim.new(0, 4)
+        gridPadding.PaddingRight = UDim.new(0, 4)
+        gridPadding.Parent = scroll
+
+        for idx, mapData in ipairs(MM2_MAPS) do
+            local cardBtn = Instance.new("TextButton")
+            cardBtn.Name = "MapCard_" .. mapData.Name
+            cardBtn.Text = ""
+            cardBtn.AutoButtonColor = false
+            cardBtn.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+            cardBtn.BorderSizePixel = 0
+            cardBtn.LayoutOrder = idx
+            cardBtn.Parent = scroll
+
+            local cardCorner = Instance.new("UICorner")
+            cardCorner.CornerRadius = UDim.new(0, 7)
+            cardCorner.Parent = cardBtn
+
+            local cardStroke = Instance.new("UIStroke")
+            cardStroke.Name = "Stroke"
+            cardStroke.Color = Color3.fromRGB(44, 44, 52)
+            cardStroke.Thickness = 1.2
+            cardStroke.Parent = cardBtn
+
+            -- Контейнер превью карты
+            local imgBox = Instance.new("Frame")
+            imgBox.Name = "ImageBox"
+            imgBox.Size = UDim2.new(0, 44, 0, 44)
+            imgBox.Position = UDim2.new(0, 6, 0.5, -22)
+            imgBox.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+            imgBox.BorderSizePixel = 0
+            imgBox.ClipsDescendants = true
+            imgBox.Parent = cardBtn
+
+            local boxCorner = Instance.new("UICorner")
+            boxCorner.CornerRadius = UDim.new(0, 5)
+            boxCorner.Parent = imgBox
+
+            local imgLabel = Instance.new("ImageLabel")
+            imgLabel.Name = "Thumb"
+            imgLabel.Size = UDim2.new(1, 0, 1, 0)
+            imgLabel.BackgroundTransparency = 1
+            imgLabel.ScaleType = Enum.ScaleType.Crop
+            imgLabel.Image = mapData.Image
+            imgLabel.Parent = imgBox
+
+            -- Название карты
+            local titleLbl = Instance.new("TextLabel")
+            titleLbl.Name = "Title"
+            titleLbl.Size = UDim2.new(1, -58, 0, 18)
+            titleLbl.Position = UDim2.new(0, 56, 0, 8)
+            titleLbl.BackgroundTransparency = 1
+            titleLbl.Text = mapData.Name
+            titleLbl.TextColor3 = Color3.fromRGB(240, 240, 240)
+            titleLbl.Font = Enum.Font.GothamBold
+            titleLbl.TextSize = 11
+            titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+            titleLbl.TextTruncate = Enum.TextTruncate.AtEnd
+            titleLbl.Parent = cardBtn
+
+            -- Статус выбора
+            local statusLbl = Instance.new("TextLabel")
+            statusLbl.Name = "Status"
+            statusLbl.Size = UDim2.new(1, -58, 0, 16)
+            statusLbl.Position = UDim2.new(0, 56, 0, 28)
+            statusLbl.BackgroundTransparency = 1
+            statusLbl.Text = "НАЖМИТЕ ДЛЯ ВЫБОРА"
+            statusLbl.TextColor3 = Color3.fromRGB(120, 120, 135)
+            statusLbl.Font = Enum.Font.Gotham
+            statusLbl.TextSize = 9
+            statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+            statusLbl.Parent = cardBtn
+
+            cardBtn.MouseButton1Click:Connect(function()
+                SelectedAutoMaps[mapData.Name] = not SelectedAutoMaps[mapData.Name]
+                updateCardVisual(mapData.Name)
+            end)
+
+            AutoMapCards[mapData.Name] = {
+                Card = cardBtn,
+                Stroke = cardStroke,
+                Image = imgLabel,
+                Status = statusLbl
+            }
+
+            updateCardVisual(mapData.Name)
+        end
+
+        return true
     end
+
+    task.spawn(function()
+        for _ = 1, 15 do
+            local okRow = setupHorizontalRow()
+            local okGrid = setupAutoMapGrid()
+            if okRow and okGrid then break end
+            task.wait(0.3)
+        end
+    end)
 
     -- ==========================================
     -- ЦИКЛ ОБНОВЛЕНИЯ ДАННЫХ И АВТОВЫБОРА (0.4 СЕК)
@@ -704,6 +847,9 @@ return function(Window)
         while task.wait(0.4) do
             if not HorizontalCards[1] then
                 setupHorizontalRow()
+            end
+            if not next(AutoMapCards) then
+                setupAutoMapGrid()
             end
 
             local anyVoteActive = false
@@ -717,6 +863,19 @@ return function(Window)
                         Index = i,
                         Name = mName
                     })
+
+                    -- Динамическое обновление картинок карт прямо из лобби игры
+                    for _, mData in ipairs(MM2_MAPS) do
+                        if cleanMapString(mName):find(cleanMapString(mData.Name), 1, true) then
+                            if mData.Image ~= mImg then
+                                mData.Image = mImg
+                                local cardRef = AutoMapCards[mData.Name]
+                                if cardRef and cardRef.Image then
+                                    cardRef.Image.Image = mImg
+                                end
+                            end
+                        end
+                    end
                 end
 
                 local cardUI = HorizontalCards[i]
@@ -778,7 +937,7 @@ return function(Window)
                 end
             end
 
-            -- Автовыбор карты при старте раунда голосования
+            -- Автовыбор карты при начале голосования
             if anyVoteActive then
                 if AutoVoteEnabled and not IsGlitchingVote and not AutoVotedInCurrentSession then
                     local matchedTargets = {}
