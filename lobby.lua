@@ -18,13 +18,41 @@ return function(Window)
     end
 
     -- ==========================================
-    -- СОСТОЯНИЕ ГЛИТЧА
+    -- СОСТОЯНИЕ ГЛИТЧА И АВТОВЫБОРА
     -- ==========================================
     local IsGlitchingVote = false
     local TargetVoteIndex = nil
     local CurrentVoteThread = nil
     local HiddenOverlays = {}
     local OverlayConnection = nil
+
+    local AutoVoteEnabled = false
+    local AutoVotedInCurrentSession = false
+    local SelectedAutoMaps = {}
+    local MapToggles = {}
+
+    local MM2_MAPS = {
+        "Bio Lab",
+        "Factory",
+        "Hospital 3",
+        "Hotel",
+        "House 2",
+        "Mansion 2",
+        "Milbase",
+        "Museum",
+        "Office 2",
+        "Police Station",
+        "Research Facility",
+        "Workplace",
+        "Bank 2",
+        "Mineshaft",
+        "Ghost Town",
+        "Log Cabin"
+    }
+
+    for _, mapName in ipairs(MM2_MAPS) do
+        SelectedAutoMaps[mapName] = false
+    end
 
     -- ==========================================
     -- БЫСТРОЕ И ЛЁГКОЕ ОТКЛЮЧЕНИЕ ОВЕРЛЕЕВ
@@ -214,6 +242,30 @@ return function(Window)
     end
 
     -- ==========================================
+    -- ПРОВЕРКА КАРТЫ ДЛЯ АВТОВЫБОРА
+    -- ==========================================
+    local function cleanMapString(str)
+        return tostring(str or ""):lower():gsub("[%s%-_%p]", "")
+    end
+
+    local function isMapSelectedForAuto(rawMapName)
+        local cleanGameName = cleanMapString(rawMapName)
+        if cleanGameName == "" or cleanGameName:find("карта") or cleanGameName:find("ожидание") then
+            return false
+        end
+
+        for targetMapName, isChecked in pairs(SelectedAutoMaps) do
+            if isChecked then
+                local cleanTarget = cleanMapString(targetMapName)
+                if cleanGameName:find(cleanTarget, 1, true) or cleanTarget:find(cleanGameName, 1, true) then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    -- ==========================================
     -- БЫСТРОЕ ОЖИДАНИЕ ПЕРСОНАЖА (КАЖДЫЕ 0.01 СЕК)
     -- ==========================================
     local function waitVoteRespawnFast(oldChar)
@@ -292,7 +344,6 @@ return function(Window)
                     continue
                 end
 
-                -- Ожидание и получение живого персонажа с проверкой каждые 0.01с
                 local char = LocalPlayer.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -304,7 +355,6 @@ return function(Window)
 
                 currentChar = char
 
-                -- Телепортация строго вертикально (стоя) и сброс импульса
                 local targetPosition = targetPart.Position + Vector3.new(0, 3.2, 0)
                 hrp.CFrame = CFrame.new(targetPosition)
                 hrp.AssemblyLinearVelocity = Vector3.zero
@@ -320,11 +370,9 @@ return function(Window)
                     end
                 end)
 
-                -- Ожидание 0.2 секунды
                 task.wait(0.2)
                 if not IsGlitchingVote then break end
 
-                -- Проверка, что персонаж остался на нужном месте
                 if (hrp.Position - targetPosition).Magnitude > 5 then
                     hrp.CFrame = CFrame.new(targetPosition)
                     hrp.AssemblyLinearVelocity = Vector3.zero
@@ -336,11 +384,9 @@ return function(Window)
                     end)
                 end
 
-                -- Ресет персонажа
                 pcall(function() hum.Health = 0 end)
                 pcall(function() char:BreakJoints() end)
 
-                -- Быстрое ожидание нового персонажа с тиком 0.01с
                 if IsGlitchingVote then
                     currentChar, _, _ = waitVoteRespawnFast(currentChar)
                 end
@@ -588,7 +634,69 @@ return function(Window)
     end)
 
     -- ==========================================
-    -- ЦИКЛ ОБНОВЛЕНИЯ ДАННЫХ (0.4 СЕК)
+    -- ПОДВКЛАДКА: АВТОВЫБОР КАРТЫ
+    -- ==========================================
+    VotingTab:CreateSection("Автовыбор карты")
+
+    VotingTab:CreateToggle({
+        Name = "Включить автонакрутку",
+        CurrentValue = false,
+        Flag = "Toggle_AutoVoteMaster",
+        Callback = function(Value)
+            AutoVoteEnabled = Value
+            if Value then
+                Notify("Автовыбор", "Автонакрутка включена!", 2)
+            else
+                Notify("Автовыбор", "Автонакрутка выключена", 2)
+            end
+        end
+    })
+
+    VotingTab:CreateButton({
+        Name = "Выбрать все карты",
+        Callback = function()
+            for mapName, tgl in pairs(MapToggles) do
+                SelectedAutoMaps[mapName] = true
+                pcall(function()
+                    if tgl and tgl.Set then
+                        tgl:Set(true)
+                    end
+                end)
+            end
+            Notify("Автовыбор", "Все карты выбраны!", 1.5)
+        end
+    })
+
+    VotingTab:CreateButton({
+        Name = "Снять выбор со всех",
+        Callback = function()
+            for mapName, tgl in pairs(MapToggles) do
+                SelectedAutoMaps[mapName] = false
+                pcall(function()
+                    if tgl and tgl.Set then
+                        tgl:Set(false)
+                    end
+                end)
+            end
+            Notify("Автовыбор", "Выбор со всех карт сброшен!", 1.5)
+        end
+    })
+
+    for _, mapName in ipairs(MM2_MAPS) do
+        local safeFlag = "AutoVote_Map_" .. mapName:gsub("%s+", "_")
+        local tgl = VotingTab:CreateToggle({
+            Name = mapName,
+            CurrentValue = false,
+            Flag = safeFlag,
+            Callback = function(Value)
+                SelectedAutoMaps[mapName] = Value
+            end
+        })
+        MapToggles[mapName] = tgl
+    end
+
+    -- ==========================================
+    -- ЦИКЛ ОБНОВЛЕНИЯ ДАННЫХ И АВТОВЫБОРА (0.4 СЕК)
     -- ==========================================
     local lastStatusText = ""
 
@@ -599,10 +707,17 @@ return function(Window)
             end
 
             local anyVoteActive = false
+            local availableVotingCards = {}
 
             for i = 1, 3 do
                 local mName, vCount, mImg, isCardActive = getVoteCardData(i)
-                if isCardActive then anyVoteActive = true end
+                if isCardActive and isValidVoteImage(mImg) then
+                    anyVoteActive = true
+                    table.insert(availableVotingCards, {
+                        Index = i,
+                        Name = mName
+                    })
+                end
 
                 local cardUI = HorizontalCards[i]
                 if cardUI then
@@ -663,6 +778,27 @@ return function(Window)
                 end
             end
 
+            -- Автовыбор карты при старте раунда голосования
+            if anyVoteActive then
+                if AutoVoteEnabled and not IsGlitchingVote and not AutoVotedInCurrentSession then
+                    local matchedTargets = {}
+                    for _, cardInfo in ipairs(availableVotingCards) do
+                        if isMapSelectedForAuto(cardInfo.Name) then
+                            table.insert(matchedTargets, cardInfo)
+                        end
+                    end
+
+                    if #matchedTargets > 0 then
+                        AutoVotedInCurrentSession = true
+                        local chosen = matchedTargets[math.random(1, #matchedTargets)]
+                        Notify("Автовыбор", "Совпадение! Выбрана карта: " .. tostring(chosen.Name), 3)
+                        startVoteGlitchLoop(chosen.Index)
+                    end
+                end
+            else
+                AutoVotedInCurrentSession = false
+            end
+
             local newStatusTitle = ""
             local newStatusContent = ""
 
@@ -672,7 +808,7 @@ return function(Window)
                 newStatusContent = string.format("Карта: %s (ТП -> 0.2с -> Ресет)", tostring(aName))
             elseif anyVoteActive then
                 newStatusTitle = "Идёт голосование"
-                newStatusContent = "Картинки карт доступны. Нажмите «ВЫБРАТЬ» под нужной картой."
+                newStatusContent = AutoVoteEnabled and "Автовыбор активен. Ожидание совпадений..." or "Картинки карт доступны. Нажмите «ВЫБРАТЬ» под нужной картой."
             else
                 newStatusTitle = "Раунд начался"
                 newStatusContent = "Голосование закрыто (картинки отсутствуют). Фарм заблокирован."
