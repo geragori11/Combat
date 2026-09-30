@@ -1,8 +1,8 @@
-
 return function(Window)
     local Players = game:GetService("Players")
     local StarterGui = game:GetService("StarterGui")
     local CoreGui = game:GetService("CoreGui")
+    local Lighting = game:GetService("Lighting")
     local LocalPlayer = Players.LocalPlayer
 
     local VotingTab = Window:CreateTab("Голосование", 4483362458)
@@ -23,6 +23,81 @@ return function(Window)
     local IsGlitchingVote = false
     local TargetVoteIndex = nil
     local CurrentVoteThread = nil
+    local HiddenOverlays = {}
+
+    -- ==========================================
+    -- УПРАВЛЕНИЕ ОВЕРЛЕЯМИ И ЭКРАНОМ
+    -- ==========================================
+    local function suppressOverlays()
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if playerGui then
+            local blacklistedGuis = {
+                ["Fade"] = true,
+                ["FadeGui"] = true,
+                ["Blackout"] = true,
+                ["Loading"] = true,
+                ["Transition"] = true,
+                ["Intro"] = true,
+                ["DeathEffect"] = true,
+                ["Vignette"] = true,
+                ["BlindGui"] = true
+            }
+
+            for _, gui in ipairs(playerGui:GetChildren()) do
+                if gui:IsA("ScreenGui") then
+                    if blacklistedGuis[gui.Name] and gui.Enabled then
+                        HiddenOverlays[gui] = true
+                        gui.Enabled = false
+                    else
+                        for _, desc in ipairs(gui:GetDescendants()) do
+                            if desc:IsA("Frame") or desc:IsA("ImageLabel") then
+                                local nameLower = desc.Name:lower()
+                                if (nameLower:find("fade") or nameLower:find("black") or nameLower:find("overlay") or nameLower:find("blind") or nameLower:find("death")) and desc.Visible then
+                                    HiddenOverlays[desc] = true
+                                    desc.Visible = false
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        for _, effect in ipairs(Lighting:GetChildren()) do
+            if (effect:IsA("BlurEffect") or effect:IsA("ColorCorrectionEffect")) and effect.Enabled then
+                local eName = effect.Name:lower()
+                if eName:find("fade") or eName:find("blur") or eName:find("death") or eName:find("black") then
+                    HiddenOverlays[effect] = true
+                    effect.Enabled = false
+                end
+            end
+        end
+
+        local camera = workspace.CurrentCamera
+        if camera then
+            for _, effect in ipairs(camera:GetChildren()) do
+                if (effect:IsA("BlurEffect") or effect:IsA("ColorCorrectionEffect")) and effect.Enabled then
+                    HiddenOverlays[effect] = true
+                    effect.Enabled = false
+                end
+            end
+        end
+    end
+
+    local function restoreOverlays()
+        for obj, _ in pairs(HiddenOverlays) do
+            pcall(function()
+                if obj and obj.Parent then
+                    if obj:IsA("ScreenGui") or obj:IsA("PostEffect") then
+                        obj.Enabled = true
+                    elseif obj:IsA("GuiObject") then
+                        obj.Visible = true
+                    end
+                end
+            end)
+        end
+        table.clear(HiddenOverlays)
+    end
 
     -- ==========================================
     -- ПОИСК ОБЪЕКТОВ ЛОББИ MM2
@@ -135,7 +210,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- УПРАВЛЕНИЕ ГЛИТЧЕМ (ТП -> 0.8с -> Ресет)
+    -- УПРАВЛЕНИЕ ГЛИТЧЕМ (ТП СТОЯ -> 0.4с -> Ресет)
     -- ==========================================
     local function stopVoteGlitch(reason)
         if not IsGlitchingVote and not CurrentVoteThread then return end
@@ -146,6 +221,8 @@ return function(Window)
             task.cancel(CurrentVoteThread)
             CurrentVoteThread = nil
         end
+
+        restoreOverlays()
 
         if reason then
             Notify("Голосование", reason, 3)
@@ -177,6 +254,8 @@ return function(Window)
 
         CurrentVoteThread = task.spawn(function()
             while IsGlitchingVote do
+                suppressOverlays()
+
                 local _, _, curImg, curActive = getVoteCardData(index)
                 if not curActive or not isValidVoteImage(curImg) then
                     stopVoteGlitch("Раунд начался! Картинка карты исчезла, фарм отключен.")
@@ -201,7 +280,16 @@ return function(Window)
                     break
                 end
 
-                hrp.CFrame = targetPart.CFrame + Vector3.new(0, 2.2, 0)
+                -- Телепортация строго вертикально (стоя) и гашение инерции
+                local targetPosition = targetPart.Position + Vector3.new(0, 3.2, 0)
+                hrp.CFrame = CFrame.new(targetPosition)
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+
+                hum.PlatformStand = false
+                hum.Sit = false
+                hum:ChangeState(Enum.HumanoidStateType.Running)
+
                 pcall(function()
                     if typeof(firetouchinterest) == "function" then
                         firetouchinterest(hrp, targetPart, 0)
@@ -209,9 +297,11 @@ return function(Window)
                 end)
 
                 local timer = 0
-                while timer < 0.8 and IsGlitchingVote do
+                while timer < 0.4 and IsGlitchingVote do
                     task.wait(0.05)
                     timer = timer + 0.05
+                    suppressOverlays()
+
                     local _, _, mImg, mActive = getVoteCardData(index)
                     if not mActive or not isValidVoteImage(mImg) then
                         stopVoteGlitch("Раунд начался во время ожидания! Фарм отключен.")
@@ -313,14 +403,12 @@ return function(Window)
         local host = getHostFrame()
         if not host then return false end
 
-        -- Скрываем все встроенные тексты параграфа Rayfield
         for _, child in ipairs(host:GetChildren()) do
             if child:IsA("TextLabel") then
                 child.Visible = false
             end
         end
 
-        -- Сбрасываем внутренние отступы Rayfield, сдвигающие содержимое вниз
         local rayfieldPadding = host:FindFirstChildOfClass("UIPadding")
         if rayfieldPadding then
             rayfieldPadding.PaddingTop = UDim.new(0, 0)
@@ -368,7 +456,6 @@ return function(Window)
             cardStroke.Thickness = 1.2
             cardStroke.Parent = card
 
-            -- Контейнер под изображение
             local imgBox = Instance.new("Frame")
             imgBox.Name = "ImageBox"
             imgBox.Size = UDim2.new(1, -8, 0, 84)
@@ -382,7 +469,6 @@ return function(Window)
             boxCorner.CornerRadius = UDim.new(0, 6)
             boxCorner.Parent = imgBox
 
-            -- Изображение карты целиком (Fit)
             local img = Instance.new("ImageLabel")
             img.Name = "MapImage"
             img.Size = UDim2.new(1, 0, 1, 0)
@@ -393,7 +479,6 @@ return function(Window)
             img.Visible = false
             img.Parent = imgBox
 
-            -- Заглушка при отсутствии изображения
             local placeholder = Instance.new("TextLabel")
             placeholder.Name = "Placeholder"
             placeholder.Size = UDim2.new(1, 0, 1, 0)
@@ -406,7 +491,6 @@ return function(Window)
             placeholder.ZIndex = 14
             placeholder.Parent = imgBox
 
-            -- Название карты
             local titleLbl = Instance.new("TextLabel")
             titleLbl.Name = "TitleLabel"
             titleLbl.Size = UDim2.new(1, -6, 0, 18)
@@ -420,7 +504,6 @@ return function(Window)
             titleLbl.TextXAlignment = Enum.TextXAlignment.Center
             titleLbl.Parent = card
 
-            -- Счётчик голосов
             local votesLbl = Instance.new("TextLabel")
             votesLbl.Name = "VotesLabel"
             votesLbl.Size = UDim2.new(1, -6, 0, 16)
@@ -433,7 +516,6 @@ return function(Window)
             votesLbl.TextXAlignment = Enum.TextXAlignment.Center
             votesLbl.Parent = card
 
-            -- Кнопка выбора карты
             local actionBtn = Instance.new("TextButton")
             actionBtn.Name = "ActionButton"
             actionBtn.Size = UDim2.new(1, -8, 0, 28)
@@ -497,7 +579,6 @@ return function(Window)
 
                 local cardUI = HorizontalCards[i]
                 if cardUI then
-                    -- 1. Картинка (полное отображение)
                     if isValidVoteImage(mImg) then
                         if cardUI.LastImage ~= mImg then
                             cardUI.Image.Image = mImg
@@ -514,20 +595,17 @@ return function(Window)
                         end
                     end
 
-                    -- 2. Название карты
                     local cleanName = (mName ~= "" and mName ~= "MapName") and mName or ("Карта " .. i)
                     if cardUI.LastTitle ~= cleanName then
                         cardUI.Title.Text = cleanName
                         cardUI.LastTitle = cleanName
                     end
 
-                    -- 3. Количество голосов
                     if cardUI.LastVotes ~= vCount then
                         cardUI.Votes.Text = "Голосов: " .. tostring(vCount)
                         cardUI.LastVotes = vCount
                     end
 
-                    -- 4. Статус кнопки и карточки
                     local stateKey = (IsGlitchingVote and TargetVoteIndex == i and "FARM")
                         or (isCardActive and "READY")
                         or "CLOSED"
@@ -558,14 +636,13 @@ return function(Window)
                 end
             end
 
-            -- 5. Верхний статус
             local newStatusTitle = ""
             local newStatusContent = ""
 
             if IsGlitchingVote then
                 local aName = getVoteCardData(TargetVoteIndex)
                 newStatusTitle = "Фарм Активен!"
-                newStatusContent = string.format("Карта: %s (ТП -> 0.8с -> Ресет)", tostring(aName))
+                newStatusContent = string.format("Карта: %s (ТП -> 0.4с -> Ресет)", tostring(aName))
             elseif anyVoteActive then
                 newStatusTitle = "Идёт голосование"
                 newStatusContent = "Картинки карт доступны. Нажмите «ВЫБРАТЬ» под нужной картой."
