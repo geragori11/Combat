@@ -31,7 +31,10 @@ return function(Window)
     local SelectedAutoMaps = {}
     local AutoMapCards = {}
 
-    -- Список карт MM2 с их базовыми Asset ID изображений
+    -- Режим отладки и дампа карт
+    local DebugDumpEnabled = false
+    local DumpedMapsCache = {}
+
     local MM2_MAPS = {
         { Name = "Bio Lab", Image = "rbxassetid://290458317" },
         { Name = "Factory", Image = "rbxassetid://290458428" },
@@ -53,6 +56,45 @@ return function(Window)
 
     for _, mapData in ipairs(MM2_MAPS) do
         SelectedAutoMaps[mapData.Name] = false
+    end
+
+    -- ==========================================
+    -- ФУНКЦИИ ДАМПА КАРТ ДЛЯ ОТЛАДКИ
+    -- ==========================================
+    local function sanitizeFilename(name)
+        local clean = tostring(name or ""):gsub('[\\/:*?"<>|]', "_")
+        clean = clean:gsub("^%s+", ""):gsub("%s+$", "")
+        return clean
+    end
+
+    local function dumpMapInfo(mapName, imageId)
+        if not DebugDumpEnabled then return end
+        if typeof(writefile) ~= "function" then return end
+
+        pcall(function()
+            if typeof(isfolder) == "function" and typeof(makefolder) == "function" then
+                if not isfolder("mm2maps") then
+                    makefolder("mm2maps")
+                end
+            end
+
+            local cleanName = sanitizeFilename(mapName)
+            if cleanName == "" or cleanName:find("Карта") or cleanName:find("Ожидание") then
+                return
+            end
+
+            local cacheKey = cleanName .. "_" .. tostring(imageId)
+            if DumpedMapsCache[cacheKey] then
+                return
+            end
+            DumpedMapsCache[cacheKey] = true
+
+            local filePath = "mm2maps/" .. cleanName .. ".txt"
+            local fileData = string.format("Название: %s\nID Картинки: %s\nВремя: %s\n", tostring(mapName), tostring(imageId), os.date("%X"))
+            
+            writefile(filePath, fileData)
+            Notify("Отладка MM2", "Сохранены данные карты: " .. cleanName, 2)
+        end)
     end
 
     -- ==========================================
@@ -627,7 +669,7 @@ return function(Window)
     end
 
     -- ==========================================
-    -- ПОДВКЛАДКА: АВТОВЫБОР КАРТЫ С ИЗОБРАЖЕНИЯМИ
+    -- ПОДВКЛАДКА: АВТОВЫБОР КАРТЫ
     -- ==========================================
     VotingTab:CreateSection("Автовыбор карты")
 
@@ -645,6 +687,20 @@ return function(Window)
         end
     })
 
+    VotingTab:CreateToggle({
+        Name = "Режим отладки (дамп карт в mm2maps/)",
+        CurrentValue = false,
+        Flag = "Toggle_DebugDumpMaps",
+        Callback = function(Value)
+            DebugDumpEnabled = Value
+            if Value then
+                Notify("Отладка MM2", "Дамп включен! Файлы карт сохраняются в mm2maps/", 3)
+            else
+                Notify("Отладка MM2", "Дамп карт отключен", 2)
+            end
+        end
+    })
+
     local function updateCardVisual(mapName)
         local cardInfo = AutoMapCards[mapName]
         if not cardInfo then return end
@@ -653,13 +709,11 @@ return function(Window)
         if isSelected then
             cardInfo.Card.BackgroundColor3 = Color3.fromRGB(20, 52, 32)
             cardInfo.Stroke.Color = Color3.fromRGB(50, 220, 100)
-            cardInfo.Status.Text = "ВЫБРАНА"
-            cardInfo.Status.TextColor3 = Color3.fromRGB(80, 240, 140)
+            cardInfo.Stroke.Thickness = 1.8
         else
             cardInfo.Card.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
             cardInfo.Stroke.Color = Color3.fromRGB(44, 44, 52)
-            cardInfo.Status.Text = "НАЖМИТЕ ДЛЯ ВЫБОРА"
-            cardInfo.Status.TextColor3 = Color3.fromRGB(120, 120, 135)
+            cardInfo.Stroke.Thickness = 1.2
         end
     end
 
@@ -762,7 +816,6 @@ return function(Window)
             cardStroke.Thickness = 1.2
             cardStroke.Parent = cardBtn
 
-            -- Контейнер превью карты
             local imgBox = Instance.new("Frame")
             imgBox.Name = "ImageBox"
             imgBox.Size = UDim2.new(0, 44, 0, 44)
@@ -784,32 +837,19 @@ return function(Window)
             imgLabel.Image = mapData.Image
             imgLabel.Parent = imgBox
 
-            -- Название карты
             local titleLbl = Instance.new("TextLabel")
             titleLbl.Name = "Title"
-            titleLbl.Size = UDim2.new(1, -58, 0, 18)
-            titleLbl.Position = UDim2.new(0, 56, 0, 8)
+            titleLbl.Size = UDim2.new(1, -58, 1, 0)
+            titleLbl.Position = UDim2.new(0, 56, 0, 0)
             titleLbl.BackgroundTransparency = 1
             titleLbl.Text = mapData.Name
             titleLbl.TextColor3 = Color3.fromRGB(240, 240, 240)
             titleLbl.Font = Enum.Font.GothamBold
-            titleLbl.TextSize = 11
+            titleLbl.TextSize = 12
             titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+            titleLbl.TextYAlignment = Enum.TextYAlignment.Center
             titleLbl.TextTruncate = Enum.TextTruncate.AtEnd
             titleLbl.Parent = cardBtn
-
-            -- Статус выбора
-            local statusLbl = Instance.new("TextLabel")
-            statusLbl.Name = "Status"
-            statusLbl.Size = UDim2.new(1, -58, 0, 16)
-            statusLbl.Position = UDim2.new(0, 56, 0, 28)
-            statusLbl.BackgroundTransparency = 1
-            statusLbl.Text = "НАЖМИТЕ ДЛЯ ВЫБОРА"
-            statusLbl.TextColor3 = Color3.fromRGB(120, 120, 135)
-            statusLbl.Font = Enum.Font.Gotham
-            statusLbl.TextSize = 9
-            statusLbl.TextXAlignment = Enum.TextXAlignment.Left
-            statusLbl.Parent = cardBtn
 
             cardBtn.MouseButton1Click:Connect(function()
                 SelectedAutoMaps[mapData.Name] = not SelectedAutoMaps[mapData.Name]
@@ -820,7 +860,7 @@ return function(Window)
                 Card = cardBtn,
                 Stroke = cardStroke,
                 Image = imgLabel,
-                Status = statusLbl
+                Title = titleLbl
             }
 
             updateCardVisual(mapData.Name)
@@ -864,7 +904,12 @@ return function(Window)
                         Name = mName
                     })
 
-                    -- Динамическое обновление картинок карт прямо из лобби игры
+                    -- Дамп карты в папку mm2maps при включенной отладке
+                    if DebugDumpEnabled then
+                        dumpMapInfo(mName, mImg)
+                    end
+
+                    -- Динамическое обновление картинок в сетке
                     for _, mData in ipairs(MM2_MAPS) do
                         if cleanMapString(mName):find(cleanMapString(mData.Name), 1, true) then
                             if mData.Image ~= mImg then
